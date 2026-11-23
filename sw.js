@@ -1,4 +1,6 @@
-/* Service Worker: lädt zuerst aus dem Netz (immer aktuelle Version), offline aus dem Speicher. */
+/* Service Worker: lädt zuerst aus dem Netz (immer aktuelle Version), offline aus dem Speicher.
+   Alle Netzabrufe umgehen den Browser-Zwischenspeicher (GitHub Pages erlaubt bis zu 10 Minuten),
+   damit nach einem Update nie alte und neue Dateien gemischt oder veraltet offline gespeichert werden. */
 const VERSION = "2.1.0";
 const CH = "vivalink-test-"; // Test-Build: "vivalink-test-"
 const C = CH + VERSION;
@@ -23,7 +25,7 @@ const F = [
   "js/app.js",
 ];
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(C).then((c) => c.addAll(F)));
+  e.waitUntil(caches.open(C).then((c) => c.addAll(F.map((u) => new Request(u, { cache: "reload" })))));
   self.skipWaiting();
 });
 self.addEventListener("activate", (e) => {
@@ -34,15 +36,22 @@ self.addEventListener("activate", (e) => {
       .then(() => self.clients.claim()),
   );
 });
+const fresh = (req) => {
+  try {
+    return new Request(req, { cache: "no-cache" });
+  } catch (e) {
+    return req;
+  }
+};
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
-    fetch(req)
+    fetch(fresh(req))
       .then((r) => {
         if (r.ok && r.type === "basic") {
           const c = r.clone();
-          caches.open(C).then((x) => x.put(req, c));
+          e.waitUntil(caches.open(C).then((x) => x.put(req, c)));
         }
         return r;
       })
