@@ -153,7 +153,7 @@ function brandSheet() {
 <label>Instagram-Kontoname (z. B. @…)</label><input id="bp-handle" value="${esc(b.handle)}">
 <label>Feste Hashtags (optional)</label><input id="bp-tags" value="${esc(b.hashtags)}">
 <label>Niemals erwähnen (optional)</label><input id="bp-avoid" value="${esc(b.avoid)}">
-<h2>Markenfarben (aus dem offiziellen Logo ermittelt)</h2><div class="row">${col("pink", "Pink")}${col("violet", "Violett")}${col("orange", "Orange")}</div>
+<h2>Markenfarben (aus dem offiziellen Logo, bestätigt)</h2><div class="row">${col("pink", "Pink")}${col("violet", "Violett")}${col("orange", "Orange")}</div>
 <label><input type="checkbox" id="bp-ok" ${b.colorsConfirmed ? "checked" : ""} style="width:auto;margin-right:6px">Farben sind korrekt (bestätigt)</label>
 <h2>Rhythmus</h2><label>Wochentage</label><div class="chips" style="flex-wrap:wrap">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="chip"><input type="checkbox" data-day="${d}" ${st.days.includes(d) ? "checked" : ""} style="width:auto;margin:0 4px 0 0">${WD[d]}</label>`).join("")}</div>
 <div class="row"><div style="flex:1"><label>Uhrzeit (Annahme, später aus Ergebnissen)</label><input type="time" id="bp-time" value="${esc(st.time)}"></div><div style="flex:1"><label>Reels pro Monat</label><input id="bp-reels" inputmode="numeric" value="${esc(st.reelsPerMonth)}"></div></div>

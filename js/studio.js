@@ -17,15 +17,15 @@ const TEMPLATES = ["cover", "tipp", "info", "frage", "ankuendigung", "rueckblick
 const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 const PLAN_FORMAT = "vivalink-studio-plan";
 
-/* Markenfarben aus dem offiziellen Logo (vorläufig, bis der Gründer sie bestätigt). */
+/* Markenfarben aus dem offiziellen Logo (vom Gründer bestätigt). Anmeldung über die Website (vom Gründer angegeben). */
 const BRAND_DEFAULT = {
   name: "Vivalink",
   website: "vivalink.me",
   region: "",
   handle: "",
-  signup: "",
+  signup: "Registrierung über vivalink.me",
   colors: { pink: "#FA0372", violet: "#6203DD", orange: "#FE6603", magenta: "#AC01B7", text: "#000000" },
-  colorsConfirmed: false,
+  colorsConfirmed: true,
   font: "Nunito",
   audience: "Erwachsene, die neue Menschen kennenlernen möchten",
   tone: "freundlich, natürlich, modern und professionell; Du-Ansprache; deutsche Texte; Emojis nur sparsam (höchstens 1–2 pro Beitrag)",
