@@ -8,9 +8,16 @@ function vHome() {
 <div class="stats"><div class="stat"><b>${open.length}</b><span>offen</span></div><div class="stat"><b>${open.filter((x) => x.due && x.due < t).length}</b><span>überfällig</span></div><div class="stat"><b>${act.length}</b><span>Wissen</span></div><div class="stat"><b>${act.filter((m) => m.cat === "Entscheidung").length}</b><span>Entscheidungen</span></div></div>
 <h2>Empfehlungen</h2>` +
     topHtml() +
-    `${meetupHtml()}<h2>Kennzahlen</h2>${S.metrics.map(mCardHtml).join("")}<h2>Als Nächstes</h2><div class="row"><button class="p" data-a="newMem">Wissen eintragen</button><button data-a="newTask">Aufgabe anlegen</button><button data-a="tab" data-id="ai">Arbeitsauftrag</button></div>
+    `${meetupHtml()}<h2>Kennzahlen</h2>${S.metrics.map(mCardHtml).join("")}${studioHomeCard()}<h2>Als Nächstes</h2><div class="row"><button class="p" data-a="newMem">Wissen eintragen</button><button data-a="newTask">Aufgabe anlegen</button><button data-a="tab" data-id="ai">Arbeitsauftrag</button></div>
 <p class="mut">Die KI-Beratung und das Instagram-Studio folgen in den nächsten Schritten.</p>`
   );
+}
+
+function studioHomeCard() {
+  if (!S.studio) return "";
+  const t = today(),
+    wk = livePosts().filter((p) => p.date && p.date >= t && p.date <= addDays(t, 7) && p.status !== "abgelehnt");
+  return `<h2>Instagram</h2><div class="card" data-a="tab" data-id="studio"><div class="row sp"><b>Nächste 7 Tage</b><b>${wk.length} Beiträge</b></div><div class="mut">${wk.filter((p) => p.status === "freigegeben").length} freigegeben · ${wk.filter((p) => p.status === "entwurf").length} Entwürfe · ${wk.filter((p) => p.status === "veroeffentlicht").length} veröffentlicht</div></div>`;
 }
 
 function vTasks() {
@@ -75,11 +82,12 @@ function vMore() {
   const gpu = "gpu" in navigator,
     oc = openConflicts();
   return `<h1>Mehr</h1><h2>Backup</h2><div class="card"><div class="mut">Letztes Backup: ${S.lastBackup ? fmt(S.lastBackup) : "noch keines"}</div>
-<p>Sichere dein Backup als Text in einer <b>gesperrten Notiz</b> oder als Datei. Es enthält auch vertrauliche Einträge. So kannst du es auch auf das andere Gerät übertragen.</p>
+<p class="mut">Optional: nur nötig, um Daten auf ein anderes Gerät zu übertragen, bis die Synchronisierung kommt. Das Backup enthält auch vertrauliche Einträge – nur in einer <b>gesperrten Notiz</b> oder als Datei aufbewahren.</p>
 <div class="row"><button class="p" data-a="exp">Backup kopieren</button><button data-a="expFile">Als Datei sichern</button></div>
 <label style="display:block;margin-top:12px">Backup einfügen, prüfen und zusammenführen</label><textarea id="imp" placeholder="Backup-Text hier einfügen"></textarea><div class="row"><button data-a="chkImp">Backup prüfen</button><button data-a="imp">Zusammenführen</button></div><div id="impRes"></div>
 ${PREIMP ? `<p class="mut">Rückgängig-Punkt vom ${new Date(PREIMP.at).toLocaleString("de-DE")} (${esc(PREIMP.label || "Import")}).</p><button data-a="undoImp">Letzten Import rückgängig machen</button>` : ""}</div>
-${IS_TEST && typeof demoCard === "function" ? demoCard() : ""}<h2>Datenkonflikte</h2>${oc.length ? `<p class="mut">Derselbe Eintrag wurde auf zwei Geräten unterschiedlich geändert. Bis zu deiner Entscheidung gilt die neuere Version. Nichts wurde gelöscht.</p>` + oc.map(conflictHtml).join("") : '<div class="card mut">Keine offenen Konflikte.</div>'}
+${IS_TEST && typeof demoCard === "function" ? demoCard() : ""}<h2>Automatische Sicherung</h2><div class="card"><p>Die App legt täglich automatisch einen Sicherungspunkt auf diesem Gerät an (die letzten 7 Tage). Manuelle Backups sind nicht nötig.</p><button data-a="snaps">Sicherungspunkte anzeigen</button></div>
+<h2>Datenkonflikte</h2>${oc.length ? `<p class="mut">Derselbe Eintrag wurde auf zwei Geräten unterschiedlich geändert. Bis zu deiner Entscheidung gilt die neuere Version. Nichts wurde gelöscht.</p>` + oc.map(conflictHtml).join("") : '<div class="card mut">Keine offenen Konflikte.</div>'}
 <h2>Diagnose</h2><div class="card"><p>Technischer Zustand, Speichertest, Integritätsprüfung und Fehlerprotokoll. Der Diagnosebericht enthält keine Inhalte aus Gedächtnis, Aufgaben oder Kennzahlen.</p><button class="p" data-a="diag">Diagnose öffnen</button></div>
 <h2>Gerätetest für lokale KI</h2><div class="card">WebGPU: <b>${gpu ? "verfügbar" : "nicht verfügbar"}</b><p class="mut">${gpu ? "Dein Gerät kann voraussichtlich ein kleines lokales KI-Modell ausführen. Den echten Leistungstest bauen wir im nächsten Schritt." : "Ohne WebGPU läuft keine lokale KI im Browser. Prüfe unter iOS Einstellungen › Apps › Safari › Erweitert › Funktionen, ob WebGPU aktiv ist."}</p></div>
 <h2>KI-Test</h2><div class="card"><p>Teste ein lokales KI-Modell auf diesem Gerät und halte die Ergebnisse fest. Deine Unternehmensdaten werden dabei nicht verändert.</p><button class="p" data-a="aiTest">KI-Test öffnen</button></div><h2>Gestaltung</h2><div class="card"><label>Akzentfarbe (später deine Markenfarbe)</label><input type="color" id="ac" value="${esc(S.accent || "#0f766e")}" style="height:48px;padding:4px"></div>
@@ -87,18 +95,20 @@ ${IS_TEST && typeof demoCard === "function" ? demoCard() : ""}<h2>Datenkonflikte
 }
 
 function render() {
-  const v = { home: vHome, tasks: vTasks, memory: vMem, ai: vAi, more: vMore }[tab]();
+  const v = { home: vHome, tasks: vTasks, memory: vMem, studio: vStudio, ai: vAi, more: vMore }[tab]();
   $("#app").innerHTML = (IS_TEST ? '<div class="testbar">TESTVERSION · nur künstliche Testdaten · getrennt von deiner Vivalink AI</div>' : "") + v;
   document.documentElement.style.setProperty("--ac", S.accent || "#0f766e");
   $("#nav").innerHTML = [
     ["home", "Start"],
     ["tasks", "Aufgaben"],
     ["memory", "Gedächtnis"],
+    ["studio", "Studio"],
     ["ai", "Aufträge"],
     ["more", "Mehr"],
   ]
     .map((x) => `<button class="${tab === x[0] ? "on" : ""}" data-a="tab" data-id="${esc(x[0])}">${x[1]}</button>`)
     .join("");
+  if (tab === "studio") paintThumbs();
 }
 const sheet = (h) => {
   const s = $("#sheet");

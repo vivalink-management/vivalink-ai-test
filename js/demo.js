@@ -59,13 +59,55 @@ function demoConflictBackup() {
   x.updatedAt = Date.now() + 60000;
   return JSON.stringify(b);
 }
+/* Studio-Demo: Demo-Markenprofil und ein künstlicher Monatsplan (wie eine KI-Antwort), damit das Studio ohne KI testbar ist. */
+const DEMO_TEXT = {
+  tipps: ["Der erste Schritt ist der schwerste", "Kleine Fragen, große Gespräche", "Komm ein paar Minuten früher", "Zuhören verbindet"],
+  orte: ["Ideen für ein entspanntes Treffen", "Gemeinsam draußen aktiv", "Ein gemütlicher Abend in kleiner Runde"],
+  community: ["Was ist dein liebster Ort für ein erstes Treffen?", "Wie lernst du am liebsten neue Leute kennen?", "Welches Hobby würdest du gern mit anderen teilen?"],
+  meetup: ["Bald ist es so weit", "Sei beim nächsten Treffen dabei"],
+  sofunktionierts: ["So funktioniert es"],
+  rueckblick: ["Danke fürs Dabeisein"],
+};
+function demoStudio() {
+  const b = S.studio.brand;
+  b.region = b.region || "Demo-Region";
+  b.signup = b.signup || "Registrierung über vivalink.me (Demo)";
+  b.handle = b.handle || "@demo";
+  touch(b);
+  const n = {};
+  const slots = planSlots(today().slice(0, 7)).concat(planSlots(nextMonth(today().slice(0, 7)))).slice(0, 12);
+  const posts = slots.map((s) => {
+    const L = DEMO_TEXT[s.pillar] || DEMO_TEXT.tipps,
+      t = L[(n[s.pillar] = (n[s.pillar] || 0) + 1) % L.length];
+    const slides =
+      s.type === "karussell"
+        ? [
+            { template: "cover", title: t, text: "Demo-Beitrag – künstlicher Text" },
+            { template: "tipp", title: "Sei neugierig", text: "Stell offene Fragen und hör aufmerksam zu. (Demo)" },
+            { template: "tipp", title: "Bleib entspannt", text: "Niemand erwartet Perfektion – kleine Gespräche reichen. (Demo)" },
+            { template: "abschluss", title: "Lust auf neue Kontakte?", text: "Alle Infos auf der Website." },
+          ]
+        : s.pillar === "meetup"
+          ? [{ template: "ankuendigung", title: t, text: "Demo-Ankündigung", details: S.meetup && S.meetup.date ? fmtLong(S.meetup.date) + "\n" + S.meetup.place : "" }]
+          : [{ template: s.pillar === "community" ? "frage" : "cover", title: t, text: "Schreib es in die Kommentare (Demo)" }];
+    return { ...s, title: t + " (Demo " + s.date + ")", hook: t, slides, caption: `${t}\n\nDas ist ein künstlicher Demo-Text für die Testversion.\n\nMehr auf ${b.website}`, hashtags: ["#Vivalink", "#Demo", "#NeueLeuteKennenlernen"] };
+  });
+  return importPlan(JSON.stringify({ format: PLAN_FORMAT, version: 1, posts }));
+}
 function demoCard() {
   return `<h2>Testdaten (nur Testversion)</h2><div class="card"><p>Hier kannst du alles gefahrlos ausprobieren. Bitte <b>keine echten Unternehmensdaten</b> eingeben. Die Testversion hat einen eigenen Speicher und berührt deine Vivalink AI nicht.</p>
-<div class="row"><button class="p" data-a="demoLoad">Demodaten laden</button><button data-a="demoV1">Altes Backup (V1) erzeugen</button><button data-a="demoConflict">Konflikt-Backup erzeugen</button><button data-a="demoReset">Alle Testdaten löschen</button></div>
+<div class="row"><button class="p" data-a="demoLoad">Demodaten laden</button><button data-a="demoStudio">Studio-Demo laden</button><button data-a="demoV1">Altes Backup (V1) erzeugen</button><button data-a="demoConflict">Konflikt-Backup erzeugen</button><button data-a="demoReset">Alle Testdaten löschen</button></div>
 <p class="mut">„Altes Backup“ und „Konflikt-Backup“ füllen das Backup-Feld oben. Danach „Backup prüfen“ und „Zusammenführen“ tippen.</p></div>`;
 }
 async function demoAction(a) {
   if (!IS_TEST) return;
+  if (a === "demoStudio") {
+    const r = demoStudio();
+    await save();
+    tab = "studio";
+    render();
+    return toast(r.added.length + " Demo-Beiträge mit Grafiken im Studio");
+  }
   if (a === "demoLoad" || a === "demoReset") {
     if (window._dm !== a) {
       window._dm = a;
@@ -74,7 +116,7 @@ async function demoAction(a) {
     window._dm = null;
     S = a === "demoLoad" ? demoState() : { v: 1, dev: uid(), memory: [], tasks: [], accent: "", lastBackup: "" };
     migrate();
-    if (a === "demoLoad") demoMetrics(S);
+    if (a === "demoLoad") demoMetrics(S), runAutomations();
     await aiSave([]);
     await save();
     PREIMP = null;

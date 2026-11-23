@@ -284,17 +284,36 @@ function findings() {
       }
     }
   }
-  if ((S.memory.length || S.tasks.length) && (!S.lastBackup || ago(S.lastBackup) > 7))
+  // Unauffälliger Hinweis (nur unter „Alle Hinweise“), höchstens alle 30 Tage – automatische Sicherungspunkte sind aktiv
+  if ((S.memory.length || S.tasks.length) && (!S.lastBackup || ago(S.lastBackup) > 30))
     add(
       "bk",
       "system",
-      2,
+      0,
       "fakt",
-      "Backup ist veraltet",
-      "Sichere deine Daten unter „Mehr“.",
-      [S.lastBackup ? "Letztes Backup: " + fmt(S.lastBackup) + "." : "Es gibt noch kein Backup."],
+      "Hinweis: keine Sicherung außerhalb des Geräts",
+      "Die App sichert täglich automatisch auf diesem Gerät. Eine Sicherung außerhalb des Geräts folgt mit der Synchronisierung.",
+      [S.lastBackup ? "Letzte manuelle Sicherung: " + fmt(S.lastBackup) + "." : "Bisher keine manuelle Sicherung.", "„Nicht relevant“ blendet den Hinweis für 60 Tage aus."],
       "more",
     );
+  /* Instagram-Studio: erkennt selbstständig, wann Marketing-Arbeit ansteht */
+  if (S.studio) {
+    const SP = livePosts(),
+      nm = nextMonth(t.slice(0, 7)),
+      in7 = addDays(t, 7);
+    const miss = brandMissing();
+    if (miss.length) add("ig-brand", "studio", 1, "fakt", "Markenprofil für Instagram unvollständig", "Ergänze im Studio: " + miss.join(", ") + ".", ["Ohne diese Angaben verweisen Beiträge nur auf die Website."], "studio");
+    if (Number(t.slice(8)) >= 20 && !SP.some((p) => (p.date || "").startsWith(nm)))
+      add("ig-plan", "studio", 1, "fakt", "Instagram-Plan für " + new Date(nm + "-15T12:00").toLocaleDateString("de-DE", { month: "long" }) + " fehlt", "Erstelle im Studio den Monatsplan.", ["Für den nächsten Monat ist noch kein Beitrag geplant."], "studio");
+    const wait = SP.filter((p) => p.status === "entwurf" && p.date && p.date >= t && p.date <= in7);
+    if (wait.length) add("ig-wait", "studio", 2, "fakt", wait.length + " Instagram-Beitrag/Beiträge warten auf Freigabe", "Prüfe und gib sie im Studio frei.", wait.slice(0, 5).map((p) => `${fmt(p.date)}: ${p.title}`), "studio");
+    else if (!SP.some((p) => p.date && p.date >= t && p.date <= in7 && p.status !== "abgelehnt"))
+      add("ig-none", "studio", 1, "fakt", "Keine Instagram-Beiträge für die nächsten 7 Tage", "Erstelle Beiträge im Studio.", ["Für die nächsten 7 Tage ist nichts geplant."], "studio");
+    const due = SP.filter((p) => p.status === "freigegeben" && p.date && p.date <= t);
+    if (due.length) add("ig-due", "studio", 2, "fakt", due.length + " freigegebene(r) Beitrag/Beiträge zur Veröffentlichung fällig", "Im Studio öffnen → „Teilen (Instagram)“ → danach „Als veröffentlicht markieren“.", due.slice(0, 5).map((p) => `${fmt(p.date)} ${p.time}: ${p.title}`), "studio");
+    const unr = SP.filter((p) => p.status === "veroeffentlicht" && !p.metrics && p.publishedAt && now - p.publishedAt > 3 * 864e5);
+    if (unr.length) add("ig-rate", "studio", 1, "fakt", unr.length + " veröffentlichte(r) Beitrag/Beiträge ohne Ergebnisse", "Trage Reichweite und Interaktionen ein – daraus lernt die Planung.", unr.slice(0, 5).map((p) => p.title), "studio");
+  }
   /* Technische Selbstüberwachung: Datenkonflikte und Fehler im technischen Protokoll */
   const oc = openConflicts();
   if (oc.length)
@@ -331,6 +350,7 @@ function pickTop(F) {
   const n = {},
     o = [];
   for (const f of F) {
+    if (f.sev < 1) continue; // Hinweise ohne Dringlichkeit nur unter „Alle Hinweise“
     if (o.length >= 3) break;
     if ((n[f.g] || 0) < 2) {
       o.push(f);

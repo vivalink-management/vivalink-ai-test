@@ -87,7 +87,7 @@ document.addEventListener("click", async (e) => {
   } else if (a === "mk") {
     const f = findings().find((x) => x.id === id);
     if (!f) return;
-    const G = { task: "Ziele", memory: "Ziele", metric: "Marketing", meetup: "Meetup", system: "Ziele" },
+    const G = { task: "Ziele", memory: "Ziele", metric: "Marketing", meetup: "Meetup", system: "Ziele", studio: "Instagram" },
       off = f.sev >= 3 ? 3 : f.sev === 2 ? 7 : 14,
       due = new Date(Date.now() + off * 864e5).toLocaleDateString("sv-SE");
     const x = {
@@ -381,6 +381,9 @@ document.addEventListener("click", async (e) => {
       toast("Konflikt entschieden");
     }
   } else if (a.startsWith("demo") && IS_TEST && typeof demoAction === "function") demoAction(a);
+  else if (a.startsWith("st")) studioAction(a, id, b);
+  else if (a === "snaps") snapSheet();
+  else if (a === "snapRestore") snapRestore(id);
   else if (a === "diag") diagSheet();
   else if (a === "cpDiag") {
     const t = $("#diagTxt");
@@ -459,7 +462,11 @@ document.addEventListener("change", (e) => {
   S = raw || { v: SCHEMA, dev: uid(), memory: [], tasks: [], accent: "", lastBackup: "" };
   let ch = migrate();
   if (detectForks(S)) ch = true;
+  // Selbstständig erkannte Instagram-Anlässe (z. B. Meetup ohne Ankündigung) als Entwurf vorbereiten
+  const auto = runAutomations();
+  if (auto.length) (ch = true), logEvent("info", "studio.auto", auto.length + " Entwurf/Entwürfe automatisch erstellt");
   if (ch) await save();
+  await autoSnapshot();
   render();
   if ("serviceWorker" in navigator)
     navigator.serviceWorker.register("sw.js").catch((e) => logEvent("warn", "sw.register", (e && e.message) || "Registrierung fehlgeschlagen"));

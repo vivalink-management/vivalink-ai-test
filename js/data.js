@@ -16,6 +16,12 @@ function migrate(T = S) {
     }
   }
   if (!T.meetup) (T.meetup = { date: "", place: "", goal: "", note: "", updatedAt: 0 }), (ch = true);
+  // Instagram-Studio (ab Datenversion 4): fehlende Felder ergänzen, Vorhandenes nie überschreiben
+  const sd = studioDefaults();
+  if (!T.studio || typeof T.studio !== "object") (T.studio = sd), (ch = true);
+  for (const k of ["posts", "brand", "settings", "learned"]) if (T.studio[k] == null) (T.studio[k] = sd[k]), (ch = true);
+  for (const o of ["brand", "settings"]) for (const k in sd[o]) if (T.studio[o][k] === undefined) (T.studio[o][k] = sd[o][k]), (ch = true);
+  for (const k in sd.brand.colors) if (!T.studio.brand.colors[k]) (T.studio.brand.colors[k] = sd.brand.colors[k]), (ch = true);
   if (T.v !== SCHEMA) (T.v = SCHEMA), (ch = true);
   return ch;
 }
@@ -113,6 +119,50 @@ function cleanMeetup(r) {
   };
 }
 
+const PSTAT = ["entwurf", "freigegeben", "veroeffentlicht", "abgelehnt"];
+function cleanPost(r) {
+  if (!r || typeof r !== "object" || !isId(r.id)) return null;
+  const sl = (Array.isArray(r.slides) ? r.slides : []).slice(0, 10).map((s) => ({ template: TEMPLATES.includes(s && s.template) ? s.template : "cover", title: str(s && s.title, 200), text: str(s && s.text, 600), details: str(s && s.details, 200) }));
+  const num = (v) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : null);
+  return {
+    ...r,
+    status: PSTAT.includes(r.status) ? r.status : "entwurf",
+    date: optDate(r.date),
+    time: /^\d{2}:\d{2}$/.test(r.time || "") ? r.time : "18:00",
+    pillar: PILLARS.some((p) => p.id === r.pillar) ? r.pillar : "community",
+    type: PTYPES[r.type] ? r.type : "einzelbild",
+    title: str(r.title, 120),
+    hook: str(r.hook, 300),
+    caption: str(r.caption, 2200),
+    hashtags: (Array.isArray(r.hashtags) ? r.hashtags : []).map((h) => str(h, 60)).filter((h) => /^#[0-9A-Za-zÄÖÜäöüß_]+$/.test(h)).slice(0, 8),
+    slides: sl.length ? sl : [{ template: "cover", title: "", text: "", details: "" }],
+    story: str(r.story, 300),
+    reel: r.reel && typeof r.reel === "object" ? { script: str(r.reel.script, 3000), shots: (Array.isArray(r.reel.shots) ? r.reel.shots : []).map((s) => str(s, 300)).slice(0, 20) } : null,
+    metrics: r.metrics && typeof r.metrics === "object" ? Object.fromEntries(["reach", "likes", "comments", "saves", "shares", "follows", "at"].map((k) => [k, num(r.metrics[k])])) : null,
+    warnings: (Array.isArray(r.warnings) ? r.warnings : []).map((w) => str(w, 300)).slice(0, 10),
+    deleted: !!r.deleted,
+    updatedAt: optNum(r.updatedAt) || 0,
+    revs: revList(r.revs),
+  };
+}
+function cleanBrand(r) {
+  if (!r || typeof r !== "object") return null;
+  const o = {};
+  for (const k of ["name", "website", "region", "handle", "signup", "font", "audience", "tone", "hashtags", "avoid"]) if (r[k] != null) o[k] = str(r[k], 600);
+  o.colors = {};
+  for (const k in BRAND_DEFAULT.colors) o.colors[k] = /^#[0-9a-fA-F]{6}$/.test((r.colors || {})[k] || "") ? r.colors[k] : BRAND_DEFAULT.colors[k];
+  o.colorsConfirmed = !!r.colorsConfirmed;
+  o.goals = Array.isArray(r.goals) ? r.goals.map((g) => str(g, 200)).slice(0, 10) : BRAND_DEFAULT.goals;
+  o.updatedAt = optNum(r.updatedAt) || 0;
+  o.revs = revList(r.revs);
+  return { ...BRAND_DEFAULT, ...o };
+}
+function cleanSettings(r) {
+  if (!r || typeof r !== "object") return null;
+  const days = Array.isArray(r.days) ? [...new Set(r.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))] : SETTINGS_DEFAULT.days;
+  return { perWeek: days.length || 3, days: days.length ? days : SETTINGS_DEFAULT.days, time: /^\d{2}:\d{2}$/.test(r.time || "") ? r.time : "18:00", reelsPerMonth: Math.max(0, Math.min(8, Number(r.reelsPerMonth) || 0)), updatedAt: optNum(r.updatedAt) || 0, revs: revList(r.revs) };
+}
+
 /* Erkennt das Format: eigenes Backup-Format (ab 2.1), alte Rohdaten (Version 1/2) oder Kennzahlen-Import. */
 function parseBackup(text) {
   let j;
@@ -135,7 +185,16 @@ function parseBackup(text) {
 }
 
 function cleanIncoming(data, aitest) {
-  const out = { memory: [], tasks: [], metrics: [], meetup: null, suggest: {}, aitest: [], skipped: 0 };
+  const out = { memory: [], tasks: [], metrics: [], meetup: null, suggest: {}, aitest: [], posts: [], brand: null, settings: null, skipped: 0 };
+  const st = data.studio && typeof data.studio === "object" ? data.studio : null;
+  if (st) {
+    for (const r of Array.isArray(st.posts) ? st.posts : []) {
+      const c = cleanPost(r);
+      c ? out.posts.push(c) : out.skipped++;
+    }
+    out.brand = cleanBrand(st.brand);
+    out.settings = cleanSettings(st.settings);
+  }
   for (const r of data.memory) {
     const c = cleanMemory(r);
     c ? out.memory.push(c) : out.skipped++;
@@ -295,6 +354,20 @@ function mergeInto(T, inc) {
       if (take) (T.meetup = inc.meetup), rep.updated++;
     }
   }
+  // Instagram-Studio: Beiträge wie Aufgaben (mit Konflikterkennung), Profil und Rhythmus als Ganzes
+  if (T.studio) {
+    mergeList(T, T.studio.posts, "posts", inc.posts || [], rep, ["warnings"]);
+    for (const k of ["brand", "settings"]) {
+      if (!inc[k]) continue;
+      const res = compareRec(T.studio[k], inc[k]);
+      if (res === "take") (T.studio[k] = inc[k]), rep.updated++;
+      else if (res === "conflict-take" || res === "conflict-local") {
+        const take = res === "conflict-take";
+        addConflict(T, rep, { kind: "record", coll: k, ref: k, kept: clone(take ? inc[k] : T.studio[k]), other: clone(take ? T.studio[k] : inc[k]) });
+        if (take) (T.studio[k] = inc[k]), rep.updated++;
+      }
+    }
+  }
   for (const k in inc.suggest) {
     const r = inc.suggest[k];
     if (!T.suggest[k] || (r.at || 0) > (T.suggest[k].at || 0)) T.suggest[k] = r;
@@ -346,8 +419,8 @@ function resolveConflict(id, choice) {
       touch(x);
       return x;
     };
-    if (c.coll === "tasks" || c.coll === "memory") {
-      const list = S[c.coll],
+    if (c.coll === "tasks" || c.coll === "memory" || c.coll === "posts") {
+      const list = c.coll === "posts" ? S.studio.posts : S[c.coll],
         i = list.findIndex((x) => x.id === c.ref);
       lift(o);
       if (i < 0) list.push(o);
@@ -368,6 +441,7 @@ function resolveConflict(id, choice) {
         m.goalAt = Math.max(Date.now(), (m.goalAt || 0) + 1, (c.kept.updatedAt || 0) + 1);
       }
     } else if (c.coll === "meetup") S.meetup = lift(o);
+    else if (c.coll === "brand" || c.coll === "settings") S.studio[c.coll] = lift(o);
   } else if (choice !== "keep") return false;
   c.resolved = true;
   c.choice = choice;
@@ -436,7 +510,7 @@ async function inspectBackup(text) {
     allHere,
     sameDevice: !!(p.env && p.env.device === S.dev),
     createdAt: p.env ? p.env.createdAt : null,
-    counts: { memory: inc.memory.length, tasks: inc.tasks.length, values: inc.metrics.reduce((n, m) => n + m.entries.filter((e) => !e.deleted).length, 0), aitest: inc.aitest.length },
+    counts: { posts: inc.posts.length, memory: inc.memory.length, tasks: inc.tasks.length, values: inc.metrics.reduce((n, m) => n + m.entries.filter((e) => !e.deleted).length, 0), aitest: inc.aitest.length },
     preview: rep,
   };
 }
