@@ -1,0 +1,360 @@
+/* Schritt 2: Regelmotor (feste Regeln, keine KI). kind=fakt: direkt aus deinen Daten. kind=annahme: Richtwert. */
+let showAll = false;
+function findings() {
+  const F = [],
+    t = today(),
+    now = Date.now(),
+    open = S.tasks.filter((x) => !x.done),
+    act = S.memory.filter((m) => m.active);
+  const add = (id, g, sev, kind, title, action, why, tab) =>
+    F.push({ id, g, sev, kind, title, action, why, tab, score: sev * 10 + (kind === "fakt" ? 2 : 0) });
+  const wk = new Date(now + 7 * 864e5).toLocaleDateString("sv-SE");
+  const od = open.filter((x) => x.due && x.due < t);
+  if (od.length)
+    add(
+      "t-od",
+      "task",
+      3,
+      "fakt",
+      od.length + " Aufgabe(n) überfällig",
+      "Erledige sie oder setze realistische neue Fristen.",
+      od.slice(0, 5).map((x) => `${x.title}: Frist ${fmt(x.due)}, ${ago(x.due)} Tage überschritten`),
+      "tasks",
+    );
+  const hi = open.filter((x) => x.prio === "hoch");
+  if (hi.length > 5)
+    add(
+      "t-focus",
+      "task",
+      2,
+      "fakt",
+      "Zu viele Aufgaben mit hoher Priorität",
+      "Wähle höchstens 3 aus und stufe den Rest herab.",
+      [hi.length + " offene Aufgaben haben die Priorität „hoch“."],
+      "tasks",
+    );
+  const hn = open.filter((x) => x.prio === "hoch" && !x.due);
+  if (hn.length)
+    add(
+      "t-hn",
+      "task",
+      1,
+      "fakt",
+      hn.length + " wichtige Aufgabe(n) ohne Frist",
+      "Lege Fristen fest.",
+      hn.slice(0, 5).map((x) => x.title),
+      "tasks",
+    );
+  const st = open.filter((x) => now - (x.updatedAt || now) > 14 * 864e5);
+  if (st.length)
+    add(
+      "t-st",
+      "task",
+      1,
+      "fakt",
+      st.length + " Aufgabe(n) seit über 14 Tagen offen",
+      "Erledige, plane oder streiche sie.",
+      st.slice(0, 5).map((x) => `${x.title}: ${Math.floor((now - x.updatedAt) / 864e5)} Tage offen`),
+      "tasks",
+    );
+  if (open.length && !open.some((x) => x.due && x.due >= t && x.due <= wk))
+    add(
+      "t-wk",
+      "task",
+      1,
+      "fakt",
+      "Für die nächsten 7 Tage ist nichts geplant",
+      "Gib mindestens einer Aufgabe eine Frist in dieser Woche.",
+      ["Keine offene Aufgabe hat eine Frist bis " + fmt(wk) + "."],
+      "tasks",
+    );
+  const miss = GAPS.filter((c) => !act.some((m) => m.cat === c));
+  if (miss.length)
+    add(
+      "g-gap",
+      "memory",
+      miss.length >= 4 ? 2 : 1,
+      "fakt",
+      "Im Gedächtnis fehlt Wissen",
+      "Trage zuerst die wichtigsten Grundlagen ein: " + miss.slice(0, 3).join(", ") + ".",
+      ["Keine Einträge in: " + miss.join(", ")],
+      "memory",
+    );
+  const un = act.filter((m) => m.status === "unknown");
+  if (un.length)
+    add(
+      "g-un",
+      "memory",
+      1,
+      "fakt",
+      un.length + " Eintrag/Einträge mit unbekanntem Status",
+      "Kläre sie und setze ✅ oder 💭.",
+      un.slice(0, 5).map((m) => m.title),
+      "memory",
+    );
+  const nr = act.filter((m) => m.cat === "Entscheidung" && !m.result && ago(m.date) > 14);
+  if (nr.length)
+    add(
+      "g-nr",
+      "memory",
+      2,
+      "fakt",
+      nr.length + " Entscheidung(en) ohne Ergebnis",
+      "Trage ein, was daraus geworden ist. So kann die App später daraus lernen.",
+      nr.slice(0, 5).map((m) => `${m.title}: ${ago(m.date)} Tage ohne Ergebnis`),
+      "memory",
+    );
+  const eo = act.filter((m) => m.status === "estimate" && ago(m.date) > 60);
+  if (eo.length)
+    add(
+      "g-eo",
+      "memory",
+      1,
+      "fakt",
+      eo.length + " Einschätzung(en) seit über 60 Tagen ungeprüft",
+      "Prüfe, ob sie noch stimmen, und bestätige oder ändere sie.",
+      eo.slice(0, 5).map((m) => m.title),
+      "memory",
+    );
+  const oo = [],
+    nv = [];
+  for (const m of S.metrics) {
+    const c = cur(m),
+      o = oldE(m),
+      v = valid(m);
+    if (!c) {
+      if (o) oo.push(`${m.name}: nur früherer Stand (${num(o.value)}, ca.)`);
+      else nv.push(m.name);
+      continue;
+    }
+    const d = ago(c.date);
+    if (d > 14)
+      add(
+        "m-st-" + m.key,
+        "metric",
+        1,
+        "fakt",
+        m.name + ": Wert seit " + d + " Tagen nicht aktualisiert",
+        "Aktualisiere den Wert.",
+        [`Letzter Wert ${num(c.value)} vom ${fmt(c.date)}.`],
+        null,
+      );
+    const g = Number(m.goal);
+    if (m.goal !== "" && g > 0 && m.dir === "up" && c.value < g) {
+      const gap = Math.round((1 - c.value / g) * 100);
+      add(
+        "m-go-" + m.key,
+        "metric",
+        gap > 25 ? 2 : 1,
+        "fakt",
+        `${m.name}: ${gap} % unter dem Ziel`,
+        "Plane eine Maßnahme, die diese Zahl gezielt erhöht.",
+        [`Aktuell ${num(c.value)} (${fmt(c.date)}), Ziel ${num(g)}.`],
+        null,
+      );
+    }
+    if (m.dir !== "neutral" && v.length >= 4) {
+      const l = v.slice(-4).map((e) => e.value),
+        dn = l[0] > l[1] && l[1] > l[2] && l[2] > l[3],
+        up = l[0] < l[1] && l[1] < l[2] && l[2] < l[3];
+      if ((m.dir === "up" && dn) || (m.dir === "down" && up)) {
+        add(
+          "m-tr-" + m.key,
+          "metric",
+          2,
+          "fakt",
+          `${m.name}: ${dn ? "sinkt" : "steigt"} seit 3 Messungen`,
+          "Prüfe, was sich in dieser Zeit geändert hat. Für die Ursache nutze die Tiefenanalyse.",
+          [`Letzte Werte: ${l.map(num).join(" → ")}.`, "Das Muster ist belegt, der Grund ist unbekannt."],
+          "ai",
+        );
+        continue;
+      }
+    }
+    const c7 = cmp(m, 7);
+    if (c7 && c7.p != null && ((m.dir === "up" && c7.p <= -10) || (m.dir === "down" && c7.p >= 20)))
+      add(
+        "m-7-" + m.key,
+        "metric",
+        2,
+        "fakt",
+        `${m.name}: ${cs(c7)} in 7 Tagen`,
+        "Prüfe, was sich geändert hat. Für die Ursache nutze die Tiefenanalyse.",
+        [
+          `Aktuell ${num(c.value)} (${fmt(c.date)}).`,
+          `Datenbasis: ${v.length} Werte.`,
+          "Das Muster ist belegt, der Grund ist unbekannt.",
+        ],
+        "ai",
+      );
+  }
+  if (oo.length)
+    add(
+      "m-old",
+      "metric",
+      2,
+      "fakt",
+      oo.length + " Kennzahl(en) nur mit früherem Stand",
+      "Trage den aktuellen Wert ein. Später kommt er automatisch aus der Verwaltung.",
+      oo,
+      null,
+    );
+  if (nv.length)
+    add(
+      "m-nv",
+      "metric",
+      1,
+      "fakt",
+      nv.length + " Kennzahlen ohne Wert",
+      "Trage die wichtigsten ein oder warte auf die automatische Übernahme.",
+      nv.slice(0, 6),
+      null,
+    );
+  const u = S.meetup,
+    su = S.metrics.find((x) => x.key === "signups"),
+    sc = su && cur(su);
+  if (!u.date && !u.place)
+    add(
+      "mt-no",
+      "meetup",
+      1,
+      "fakt",
+      "Kein nächstes Meetup angelegt",
+      "Lege Datum, Ort und Ziel an (Karte auf der Startseite).",
+      ["Die Meetup-Karte ist leer."],
+      null,
+    );
+  else {
+    const dy = u.date ? Math.round((new Date(u.date + "T12:00") - new Date(t + "T12:00")) / 864e5) : null,
+      ms = [!u.date && "Datum", !u.place && "Ort", u.goal === "" && "Ziel"].filter(Boolean);
+    if (dy != null && dy < 0)
+      add(
+        "mt-past",
+        "meetup",
+        1,
+        "fakt",
+        "Das eingetragene Meetup liegt in der Vergangenheit",
+        "Trage Teilnehmer und Ergebnis ein und lege das nächste Meetup an.",
+        ["Datum: " + fmt(u.date) + "."],
+        null,
+      );
+    else {
+      if (ms.length)
+        add(
+          "mt-ms",
+          "meetup",
+          dy != null && dy <= 30 ? 2 : 1,
+          "fakt",
+          "Meetup: Angaben fehlen (" + ms.join(", ") + ")",
+          "Ergänze die fehlenden Angaben.",
+          ["Fehlt: " + ms.join(", ") + "."],
+          null,
+        );
+      const g = Number(u.goal);
+      if (dy != null && dy <= 14 && g > 0) {
+        if (!sc)
+          add(
+            "mt-nd",
+            "meetup",
+            2,
+            "fakt",
+            `Meetup in ${dy} Tagen: Anmeldezahl unbekannt`,
+            "Trage den Wert bei „Anmeldungen pro Meetup“ ein.",
+            ["Es liegt kein aktueller Wert vor."],
+            null,
+          );
+        else {
+          const nd = dy <= 3 ? 0.9 : dy <= 7 ? 0.75 : 0.5;
+          if (sc.value < g * nd)
+            add(
+              "mt-pace",
+              "meetup",
+              3,
+              "annahme",
+              `Meetup in ${dy} Tagen: Anmeldungen hinter dem Richtwert`,
+              "Starte jetzt eine gezielte Erinnerung oder Einladungsrunde.",
+              [
+                `Aktuell ${num(sc.value)} von Ziel ${num(g)} (${fmt(sc.date)}).`,
+                `Richtwert: ${Math.round(nd * 100)} % des Ziels bei ${dy <= 3 ? 3 : dy <= 7 ? 7 : 14} Tagen vorher.`,
+                "Der Richtwert ist eine Annahme. Mit genug Meetups lernt die App ihn aus deinen Daten.",
+              ],
+              "ai",
+            );
+        }
+      }
+    }
+  }
+  if ((S.memory.length || S.tasks.length) && (!S.lastBackup || ago(S.lastBackup) > 7))
+    add(
+      "bk",
+      "system",
+      2,
+      "fakt",
+      "Backup ist veraltet",
+      "Sichere deine Daten unter „Mehr“.",
+      [S.lastBackup ? "Letztes Backup: " + fmt(S.lastBackup) + "." : "Es gibt noch kein Backup."],
+      "more",
+    );
+  /* Technische Selbstüberwachung: Datenkonflikte und Fehler im technischen Protokoll */
+  const oc = openConflicts();
+  if (oc.length)
+    add(
+      "sys-cf",
+      "system",
+      3,
+      "fakt",
+      oc.length + " Datenkonflikt(e) beim Zusammenführen",
+      "Entscheide unter „Mehr › Datenkonflikte“, welche Version gilt. Bis dahin gilt die neuere.",
+      ["Derselbe Eintrag wurde auf zwei Geräten unterschiedlich geändert.", "Keine Version wurde gelöscht."],
+      "more",
+    );
+  const errs = LOG.filter((e) => e.level === "error" && now - e.at < 7 * 864e5);
+  if (errs.length)
+    add(
+      "sys-err",
+      "system",
+      1,
+      "fakt",
+      errs.length + " technische(r) Fehler in den letzten 7 Tagen",
+      "Öffne „Mehr › Diagnose“ und kopiere den Diagnosebericht für einen Reparaturauftrag.",
+      errs.slice(-3).map((e) => e.code + ": " + e.msg),
+      "more",
+    );
+  const sg = S.suggest || {},
+    hasT = (id) => S.tasks.some((x) => !x.done && x.fid === id);
+  return F.filter((f) => {
+    const s = sg[f.id];
+    return !(s && s.until > t) && !hasT(f.id);
+  }).sort((a, b) => b.score - a.score);
+}
+function pickTop(F) {
+  const n = {},
+    o = [];
+  for (const f of F) {
+    if (o.length >= 3) break;
+    if ((n[f.g] || 0) < 2) {
+      o.push(f);
+      n[f.g] = (n[f.g] || 0) + 1;
+    }
+  }
+  return o;
+}
+const fCard = (f) =>
+  `<div class="card rec ${f.sev >= 3 ? "bad" : f.sev === 2 ? "warn" : ""}"><div class="row sp"><b>${esc(f.title)}</b><span class="chip">${f.kind === "fakt" ? "Fakt" : "Annahme"}</span></div><div>${esc(f.action)}</div><details><summary class="mut">Warum sehe ich das?</summary>${f.why.map((w) => `<div class="mut">• ${esc(w)}</div>`).join("")}</details>${f.tab ? `<button class="s" data-a="tab" data-id="${esc(f.tab)}" style="margin-top:6px">${f.tab === "ai" ? "Tiefenanalyse" : "Öffnen"}</button>` : ""}<div class="row" style="margin-top:6px"><button class="s p" data-a="mk" data-id="${esc(f.id)}">Als Aufgabe anlegen</button><button class="s" data-a="later" data-id="${esc(f.id)}">Später</button><button class="s" data-a="nope" data-id="${esc(f.id)}">Nicht relevant</button></div></div>`;
+function topHtml() {
+  const F = findings(),
+    top = pickTop(F);
+  return (
+    (top.length
+      ? top.map(fCard).join("")
+      : '<div class="card rec ok">Aktuell kein Handlungsbedarf erkannt.</div>') +
+    (F.length > top.length
+      ? `<div class="row"><button class="s" data-a="all">${showAll ? "Weniger anzeigen" : "Alle Hinweise (" + F.length + ")"}</button></div>` +
+        (showAll
+          ? F.filter((f) => !top.includes(f))
+              .map(fCard)
+              .join("")
+          : "")
+      : "")
+  );
+}
