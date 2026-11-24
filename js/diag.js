@@ -152,6 +152,7 @@ async function diagSheet() {
       .map((k) => `<div style="margin:3px 0 7px"><div class="mut">${DL[k]}</div><b data-check="${k}">${esc(c[k])}</b></div>`)
       .join("")}</div>
 <h2>Integritätsprüfung</h2>${c.integrity.length ? c.integrity.map((i) => `<div class="card rec ${i.sev >= 2 ? "bad" : "warn"}" data-issue="${esc(i.code)}">${esc(i.msg)}</div>`).join("") : '<div class="card rec ok" data-issue="none">Keine Auffälligkeiten.</div>'}
+${actionsHtml()}
 <h2>Technisches Protokoll</h2>${L.length ? L.map((e) => `<div class="card ${e.level === "error" ? "rec bad" : e.level === "warn" ? "rec warn" : ""}" data-log="${esc(e.code)}"><div class="row sp"><b>${esc(e.code)}${e.n ? " ×" + e.n : ""}</b><span class="mut">${new Date(e.at).toLocaleString("de-DE")}</span></div><div class="mut">${esc(e.msg)}</div></div>`).join("") : '<p class="mut">Keine Einträge.</p>'}
 <p class="mut">Der Diagnosebericht enthält Versionen, Prüfergebnisse, Zähler und technische Meldungen, aber keine Inhalte. Du kannst ihn in einen Reparaturauftrag für Claude Code einfügen.</p>
 <textarea id="diagTxt" readonly style="min-height:120px">${esc(diagText(c))}</textarea>
@@ -161,6 +162,7 @@ async function diagSheet() {
 
 /* ---------- Automatische lokale Sicherungspunkte (täglich, die letzten 7 Tage) ---------- */
 const SNAP_KEEP = 7;
+let LASTSNAP = null; // Datum des letzten automatischen Sicherungspunkts
 async function autoSnapshot(force = false) {
   const idx = (await kvGet("snaps")) || [];
   const d = today();
@@ -173,6 +175,8 @@ async function autoSnapshot(force = false) {
   const list = [...new Set([d, ...idx])].sort().reverse();
   for (const old of list.slice(SNAP_KEEP)) await kvPut("snap-" + old, null);
   await kvPut("snaps", list.slice(0, SNAP_KEEP));
+  LASTSNAP = d;
+  logAction("snapshot.auto", "auto", true, d);
   return true;
 }
 async function snapList() {

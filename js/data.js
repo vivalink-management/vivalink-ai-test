@@ -133,13 +133,15 @@ function cleanPost(r) {
     type: PTYPES[r.type] ? r.type : "einzelbild",
     title: str(r.title, 120),
     hook: str(r.hook, 300),
-    caption: str(r.caption, 2200),
+    caption: str(r.caption, 6000),
     hashtags: (Array.isArray(r.hashtags) ? r.hashtags : []).map((h) => str(h, 60)).filter((h) => /^#[0-9A-Za-zÄÖÜäöüß_]+$/.test(h)).slice(0, 8),
     slides: sl.length ? sl : [{ template: "cover", title: "", text: "", details: "" }],
     story: str(r.story, 300),
     reel: r.reel && typeof r.reel === "object" ? { script: str(r.reel.script, 3000), shots: (Array.isArray(r.reel.shots) ? r.reel.shots : []).map((s) => str(s, 300)).slice(0, 20) } : null,
     metrics: r.metrics && typeof r.metrics === "object" ? Object.fromEntries(["reach", "likes", "comments", "saves", "shares", "follows", "at"].map((k) => [k, num(r.metrics[k])])) : null,
     warnings: (Array.isArray(r.warnings) ? r.warnings : []).map((w) => str(w, 300)).slice(0, 10),
+    hints: (Array.isArray(r.hints) ? r.hints : []).map((w) => str(w, 300)).slice(0, 12),
+    variant: Number.isInteger(r.variant) && r.variant >= 0 && r.variant <= 2 ? r.variant : 0,
     deleted: !!r.deleted,
     updatedAt: optNum(r.updatedAt) || 0,
     revs: revList(r.revs),
@@ -356,7 +358,7 @@ function mergeInto(T, inc) {
   }
   // Instagram-Studio: Beiträge wie Aufgaben (mit Konflikterkennung), Profil und Rhythmus als Ganzes
   if (T.studio) {
-    mergeList(T, T.studio.posts, "posts", inc.posts || [], rep, ["warnings"]);
+    mergeList(T, T.studio.posts, "posts", inc.posts || [], rep, ["warnings", "hints"]);
     for (const k of ["brand", "settings"]) {
       if (!inc[k]) continue;
       const res = compareRec(T.studio[k], inc[k]);

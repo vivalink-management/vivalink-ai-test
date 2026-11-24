@@ -24,7 +24,8 @@ const BRAND_DEFAULT = {
   region: "",
   handle: "",
   signup: "Registrierung über vivalink.me",
-  colors: { pink: "#FA0372", violet: "#6203DD", orange: "#FE6603", magenta: "#AC01B7", text: "#000000" },
+  // Hauptfarben aus dem Logo (bestätigt); magenta und rose sind die Zwischentöne des Logo-Verlaufs
+  colors: { pink: "#FA0372", violet: "#6203DD", orange: "#FE6603", magenta: "#AC01B7", rose: "#EE2278", text: "#000000" },
   colorsConfirmed: true,
   font: "Nunito",
   audience: "Erwachsene, die neue Menschen kennenlernen möchten",
@@ -99,7 +100,9 @@ function planSlots(ym, T = S) {
   const st = T.studio,
     set = st.settings,
     F = studioFacts(T);
-  const days = monthDays(ym).filter((d) => set.days.includes(new Date(d + "T12:00").getDay()) && d >= today());
+  // Nur freie Termine: Tage mit vorhandenem Beitrag (außer gelöscht/abgelehnt) werden nicht erneut geplant
+  const taken = new Set(st.posts.filter((p) => !p.deleted && p.status !== "abgelehnt" && p.date).map((p) => p.date));
+  const days = monthDays(ym).filter((d) => set.days.includes(new Date(d + "T12:00").getDay()) && d >= today() && !taken.has(d));
   const avail = PILLARS.filter((p) => !p.needs || (p.needs === "meetup" ? false : p.needs === "appfacts" ? hasFacts(F, ["app"]) : hasFacts(F, ["meetup-wissen"])));
   const learned = st.learned && st.learned.order ? st.learned.order : [];
   const order = [...avail].sort((a, b) => (learned.indexOf(a.id) + 1 || 99) - (learned.indexOf(b.id) + 1 || 99));
@@ -141,7 +144,7 @@ function studioPrompt(ym, T = S, only = null) {
     F = studioFacts(T);
   const slots = only ? only : planSlots(ym, T);
   const prev = recentPosts(T)
-    .map((p) => `- ${p.date || "ohne Datum"} [${p.pillar}] ${p.title}${p.hook ? " – " + p.hook : ""}`)
+    .map((p) => `- ${p.date || "ohne Datum"} [${p.pillar}${p.status === "veroeffentlicht" ? ", veröffentlicht" : ""}] ${p.title}${p.hook ? " – " + p.hook : ""}`)
     .slice(-40);
   const learned = st.learned && st.learned.summary ? st.learned.summary : "";
   const pName = (id) => (PILLARS.find((p) => p.id === id) || {}).name || id;
@@ -237,6 +240,10 @@ function factCheck(p, T = S) {
   if (/garantiert|100\s*%|immer neue freunde|beste[nr]? (app|community)|nr\.\s*1/i.test(all)) W.push("Mögliches Versprechen oder Superlativ");
   if (/(apps\.apple\.com|play\.google\.com|bit\.ly|https?:\/\/)/i.test(all) && !/(apps\.apple\.com|play\.google\.com)/i.test(allowed)) W.push("Enthält einen Link, der nicht aus den Fakten stammt");
   if (p.pillar === "meetup" && !F.some((f) => f.kind === "meetup")) W.push("Meetup-Beitrag ohne bestätigtes Meetup in den Daten");
+  const u = T.meetup;
+  if (p.pillar === "meetup" && u && u.place && u.date >= today() && !all.toLowerCase().includes(u.place.toLowerCase()))
+    W.push("Ort des Meetups („" + u.place + "“) fehlt oder weicht ab");
+  if (String(p.caption || "").length > 2200) W.push("Caption länger als 2.200 Zeichen – Instagram lässt das nicht zu");
   const dup = T.studio.posts.find((q) => q.id !== p.id && !q.deleted && (similar(q.hook, p.hook) >= 0.8 || similar(q.title, p.title) >= 0.9));
   if (dup) W.push("Ähnlich wie bereits vorhandener Beitrag: „" + dup.title + "“");
   return W;
@@ -270,7 +277,7 @@ function makePost(x, source, T = S) {
     title: str(x.title || x.hook, 120) || "Beitrag",
     hook: str(x.hook, 300),
     slides: normSlides(type, x.slides),
-    caption: str(x.caption, 2200),
+    caption: str(x.caption, 6000), // nicht abschneiden: zu lange Captions meldet die Prüfung
     hashtags: [...new Set((Array.isArray(x.hashtags) ? x.hashtags : String(x.hashtags || "").split(/[\s,]+/)).map(cleanTag).filter(Boolean))].slice(0, 8),
     facts: Array.isArray(x.facts) ? x.facts.map((f) => str(f, 10)).slice(0, 20) : [],
     story: str(x.story, 300),
@@ -280,7 +287,8 @@ function makePost(x, source, T = S) {
     meetupDate: x.meetupDate || "",
   };
   if (p.pillar === "meetup" && !p.meetupDate && T.meetup && T.meetup.date && p.date && p.date <= T.meetup.date) p.meetupDate = T.meetup.date;
-  p.warnings = factCheck(p, T);
+  p.variant = Number.isInteger(x.variant) && x.variant >= 0 && x.variant <= 2 ? x.variant : T.studio.posts.filter((q) => !q.deleted).length % 3;
+  checkPost(p, T);
   touch(p);
   return p;
 }
@@ -381,17 +389,15 @@ function runAutomations(T = S) {
 const livePosts = (T = S) => T.studio.posts.filter((p) => !p.deleted);
 function approveWeek(wk, includeWarned = false, T = S) {
   const L = livePosts(T).filter((p) => p.status === "entwurf" && p.date && weekKey(p.date) === wk && (includeWarned || !p.warnings || !p.warnings.length));
-  for (const p of L) {
-    p.status = "freigegeben";
-    p.approvedAt = Date.now();
-    touch(p);
-  }
+  for (const p of L) approvePost(p); // merkt sich den freigegebenen Inhalt (Änderung → erneute Freigabe nötig)
+  if (L.length) logAction("post.approve", "gruender", true, L.length + " Beiträge (Wochenfreigabe)");
   return L.length;
 }
 function setStatus(p, status) {
+  if (status === "freigegeben") return approvePost(p);
+  if (status === "veroeffentlicht") return markPublishedManually(p);
   p.status = status;
-  if (status === "freigegeben") p.approvedAt = Date.now();
-  if (status === "veroeffentlicht") p.publishedAt = Date.now();
+  if (status === "entwurf") p.approvedHash = null;
   touch(p);
 }
 const engagement = (m) => (m && m.reach > 0 ? ((m.likes || 0) + (m.comments || 0) + (m.saves || 0) + (m.shares || 0)) / m.reach : null);
@@ -420,5 +426,44 @@ function learn(T = S) {
   };
   return T.studio.learned;
 }
+/* Anzeige-Status: unterscheidet geplant (freigegeben, Termin in der Zukunft) und fällig */
+function postState(p, t = today()) {
+  if (p.status === "freigegeben") return p.date && p.date > t ? { k: "geplant", n: "Geplant" } : { k: "faellig", n: "Fällig" };
+  return { k: p.status, n: PSTATUS[p.status] || p.status };
+}
+/* Wichtigkeit: Meetup-Beiträge und automatisch erkannte Anlässe zuerst */
+const postPrio = (p) => (p.pillar === "meetup" || p.auto ? 2 : p.type === "karussell" ? 1 : 0);
+
+/* Stilprüfung (blockiert die Freigabe nicht): Lesbarkeit, Länge, Handlungsaufforderung, Wiederholungen */
+function styleCheck(p, T = S) {
+  const b = T.studio.brand,
+    H = [];
+  const wc = (s) => String(s || "").split(/\s+/).filter(Boolean).length;
+  const cw = wc(p.caption);
+  if (p.type !== "story" && cw < 25) H.push("Caption sehr kurz (" + cw + " Wörter) – 60–150 Wörter funktionieren meist besser");
+  if (cw > 220) H.push("Caption sehr lang (" + cw + " Wörter) – kürzen verbessert die Lesbarkeit");
+  (p.slides || []).forEach((s, i) => {
+    if (wc(s.title) > 10) H.push(`Folie ${i + 1}: Titel zu lang für mobile Lesbarkeit (${wc(s.title)} Wörter, ideal ≤ 8)`);
+    if (wc(s.text) > 40) H.push(`Folie ${i + 1}: Folientext zu lang (${wc(s.text)} Wörter, ideal ≤ 30)`);
+  });
+  const tags = (p.hashtags || []).length;
+  if (p.type !== "story" && tags < 3) H.push("Wenige Hashtags (" + tags + ") – 5–8 passende Hashtags empfohlen");
+  const emo = (String(p.caption || "").match(/\p{Extended_Pictographic}/gu) || []).length;
+  if (emo > 3) H.push(emo + " Emojis – vereinbart sind höchstens 1–2");
+  if (/\b[A-ZÄÖÜ]{6,}\b/.test(p.caption || "")) H.push("Großbuchstaben-Wörter wirken laut – lieber normal schreiben");
+  const site = (b.website || "vivalink.me").toLowerCase();
+  if (p.type !== "story" && !String(p.caption || "").toLowerCase().includes(site) && !(b.signup && String(p.caption || "").includes(b.signup)))
+    H.push("Keine Handlungsaufforderung mit „" + (b.website || "vivalink.me") + "“ – Ziel Nr. 1 sind Registrierungen");
+  const start = (s) => String(s || "").toLowerCase().split(/\s+/).slice(0, 3).join(" ");
+  const st = start(p.hook || p.caption);
+  if (st.split(" ").length === 3 && T.studio.posts.some((q) => q.id !== p.id && !q.deleted && q.date >= addDays(today(), -60) && start(q.hook || q.caption) === st))
+    H.push("Beginnt wie ein Beitrag der letzten 60 Tage („" + st + " …“)");
+  return H;
+}
+function checkPost(p, T = S) {
+  p.warnings = factCheck(p, T);
+  p.hints = styleCheck(p, T);
+}
+
 /* Kurzer Text zum Teilen: Caption + Hashtags */
 const postText = (p) => (p.caption || "").trim() + (p.hashtags && p.hashtags.length ? "\n\n" + p.hashtags.join(" ") : "");

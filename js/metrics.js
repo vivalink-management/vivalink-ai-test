@@ -11,6 +11,11 @@ const MT = [
   { k: "mkt", n: "Marketingausgaben", u: "€", d: "neutral" },
   { k: "inc", n: "Einnahmen", u: "€", d: "up" },
   { k: "exp", n: "Ausgaben", u: "€", d: "neutral" },
+  { k: "active_users", n: "Aktive Nutzer (30 Tage)", u: "", d: "up" },
+  { k: "invites", n: "Versendete Einladungen", u: "", d: "up" },
+  { k: "invite_rate", n: "Annahmequote Einladungen", u: "%", d: "up" },
+  { k: "payments", n: "Zahlungen", u: "€", d: "up" },
+  { k: "refunds", n: "Erstattungen", u: "€", d: "down" },
 ];
 const VS = { confirmed: "✅ Aktuell", estimate: "💭 Schätzung", old: "🕓 Früherer Stand" };
 let SAFE = null;

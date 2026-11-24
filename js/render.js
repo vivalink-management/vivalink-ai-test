@@ -64,12 +64,25 @@ function draw(ctx, f, x, y, color, weight, align = "left") {
   return y + f.lines.length * f.s * f.lh;
 }
 const blockH = (f) => f.lines.length * f.s * f.lh;
+/* Verlauf wie im Logo: Pink → Magenta → Violett → Rosé → Orange */
 function grad(ctx, W, H, c) {
   const g = ctx.createLinearGradient(0, 0, W, H);
   g.addColorStop(0, c.pink);
+  g.addColorStop(0.25, c.magenta || c.pink);
   g.addColorStop(0.5, c.violet);
+  g.addColorStop(0.72, c.rose || c.orange);
   g.addColorStop(1, c.orange);
   return g;
+}
+/* Hintergrund je Gestaltungsvariante (nur Markenfarben, Weiß und Schwarz) */
+function bg(ctx, W, H, c, v) {
+  if (v === 1) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, c.violet);
+    g.addColorStop(1, c.magenta || c.violet);
+    return g;
+  }
+  return grad(ctx, W, H, c);
 }
 function rr(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -101,6 +114,7 @@ function renderSlide(post, i, A, story = false) {
   const sl = post.slides[i] || post.slides[0] || {},
     n = post.slides.length;
   const tpl = sl.template || "cover";
+  const v = Number(post.variant) || 0;
   const P = 88,
     top = story ? 240 : 96,
     bottom = story ? H - 260 : H - 96;
@@ -122,8 +136,32 @@ function renderSlide(post, i, A, story = false) {
     ctx.fillText(site, n > 1 ? W / 2 : W - P, bottom);
     counter(light ? "rgba(255,255,255,.85)" : grey);
   };
+  // Variante 2: helle Titelfolie mit farbigem Logo und Verlaufsakzent
+  if (tpl === "cover" && v === 2) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = grad(ctx, W, 24, c);
+    ctx.fillRect(0, 0, W, 24);
+    img(ctx, A.sym, P, top, 230);
+    const t = fit(ctx, sl.title || post.hook, W - 2 * P, H * 0.45, 124, 56, 800, 1.1);
+    let y = draw(ctx, t, P, top + 300, dark, 800);
+    ctx.fillStyle = grad(ctx, 260, 14, c);
+    rr(ctx, P, y + 26, 260, 14, 7);
+    ctx.fill();
+    if (sl.text) draw(ctx, fit(ctx, sl.text, W - 2 * P, 300, 54, 32, 700), P, y + 80, grey, 700);
+    ctx.font = FF(800, 38);
+    ctx.fillStyle = c.violet;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(site, P, bottom);
+    if (n > 1 && !story) {
+      ctx.textAlign = "right";
+      ctx.fillText("Wischen →", W - P, bottom);
+    }
+    return cv;
+  }
   if (tpl === "cover" || tpl === "frage" || tpl === "abschluss") {
-    ctx.fillStyle = grad(ctx, W, H, c);
+    ctx.fillStyle = bg(ctx, W, H, c, v);
     ctx.fillRect(0, 0, W, H);
     if (tpl === "abschluss") {
       const lh = img(ctx, A.logoW, W / 2, top + 40, 560, "center");
@@ -259,14 +297,15 @@ async function renderPost(post, story = false) {
   const A = await brandAssets();
   return post.slides.map((_, i) => renderSlide(post, i, A, story));
 }
-const toBlob = (cv) => new Promise((ok) => cv.toBlob((b) => ok(b), "image/png"));
-async function postFiles(post, story = false) {
+const toBlob = (cv, type = "image/png") => new Promise((ok) => cv.toBlob((b) => ok(b), type, 0.92));
+/* type "image/jpeg": für die Instagram-Schnittstelle (verlangt JPEG); Teilen/Speichern nutzt PNG */
+async function postFiles(post, story = false, type = "image/png") {
   const cvs = await renderPost(post, story);
   const base = `vivalink-${post.date || today()}-${(post.title || "beitrag").toLowerCase().replace(/[^a-z0-9äöüß]+/g, "-").replace(/^-|-$/g, "").slice(0, 40)}${story ? "-story" : ""}`;
   const out = [];
   for (let i = 0; i < cvs.length; i++) {
-    const b = await toBlob(cvs[i]);
-    out.push(new File([b], `${base}${cvs.length > 1 ? "-" + (i + 1) : ""}.png`, { type: "image/png" }));
+    const b = await toBlob(cvs[i], type);
+    out.push(new File([b], `${base}${cvs.length > 1 ? "-" + (i + 1) : ""}.${type === "image/jpeg" ? "jpg" : "png"}`, { type }));
   }
   return out;
 }

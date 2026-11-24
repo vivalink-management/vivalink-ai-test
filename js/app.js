@@ -383,6 +383,23 @@ document.addEventListener("click", async (e) => {
   } else if (a.startsWith("demo") && IS_TEST && typeof demoAction === "function") demoAction(a);
   else if (a.startsWith("st")) studioAction(a, id, b);
   else if (a === "snaps") snapSheet();
+  else if (a === "sync" || a.startsWith("sy")) syncAction(a);
+  else if (a === "msr") {
+    const x = await act("measure.start", "gruender", () => startMeasure(id, Number(b.dataset.v)));
+    if (!x || x.ok === false) return toast((x && x.error) || "Befund nicht mehr aktuell");
+    await save();
+    render();
+    toast("Maßnahme freigegeben · Prüfung am " + fmt(x.measure.checkAt) + (x.measure.postId ? " · Instagram-Entwurf im Studio" : ""));
+  } else if (a === "msrOut") {
+    if (finishMeasure(id, b.dataset.v)) {
+      await save();
+      render();
+      toast("Ergebnis festgehalten (im Gedächtnis als Einschätzung)");
+    }
+  } else if (a === "allMet") {
+    showAllMet = !showAllMet;
+    render();
+  }
   else if (a === "snapRestore") snapRestore(id);
   else if (a === "diag") diagSheet();
   else if (a === "cpDiag") {
@@ -440,6 +457,7 @@ document.addEventListener("change", (e) => {
 /* Start: Daten laden, vor jedem Datenversions-Update eine geprüfte Sicherheitskopie anlegen, migrieren. */
 (async () => {
   await loadLog();
+  await loadActions();
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   } catch (e) {}
@@ -464,10 +482,12 @@ document.addEventListener("change", (e) => {
   if (detectForks(S)) ch = true;
   // Selbstständig erkannte Instagram-Anlässe (z. B. Meetup ohne Ankündigung) als Entwurf vorbereiten
   const auto = runAutomations();
-  if (auto.length) (ch = true), logEvent("info", "studio.auto", auto.length + " Entwurf/Entwürfe automatisch erstellt");
+  if (auto.length) (ch = true), logEvent("info", "studio.auto", auto.length + " Entwurf/Entwürfe automatisch erstellt"), logAction("studio.autoDraft", "auto", true, auto.length + " Entwurf/Entwürfe");
   if (ch) await save();
   await autoSnapshot();
+  LASTSNAP = ((await kvGet("snaps")) || [])[0] || null;
   render();
+  syncSoon(1500);
   if ("serviceWorker" in navigator)
     navigator.serviceWorker.register("sw.js").catch((e) => logEvent("warn", "sw.register", (e && e.message) || "Registrierung fehlgeschlagen"));
 })();

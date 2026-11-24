@@ -284,18 +284,9 @@ function findings() {
       }
     }
   }
-  // Unauffälliger Hinweis (nur unter „Alle Hinweise“), höchstens alle 30 Tage – automatische Sicherungspunkte sind aktiv
-  if ((S.memory.length || S.tasks.length) && (!S.lastBackup || ago(S.lastBackup) > 30))
-    add(
-      "bk",
-      "system",
-      0,
-      "fakt",
-      "Hinweis: keine Sicherung außerhalb des Geräts",
-      "Die App sichert täglich automatisch auf diesem Gerät. Eine Sicherung außerhalb des Geräts folgt mit der Synchronisierung.",
-      [S.lastBackup ? "Letzte manuelle Sicherung: " + fmt(S.lastBackup) + "." : "Bisher keine manuelle Sicherung.", "„Nicht relevant“ blendet den Hinweis für 60 Tage aus."],
-      "more",
-    );
+  // Keine Erinnerung an manuelle Backups (Entscheidung des Gründers). Gemeldet wird nur, wenn die automatische Sicherung ausfällt.
+  if ((S.memory.length || S.tasks.length) && (!LASTSNAP || ago(LASTSNAP) > 2))
+    add("sys-snap", "system", 2, "fakt", "Automatische Sicherung funktioniert nicht", "Öffne „Mehr › Diagnose“ und prüfe den Speichertest.", [LASTSNAP ? "Letzter automatischer Sicherungspunkt: " + fmt(LASTSNAP) + "." : "Noch kein automatischer Sicherungspunkt vorhanden."], "more");
   /* Instagram-Studio: erkennt selbstständig, wann Marketing-Arbeit ansteht */
   if (S.studio) {
     const SP = livePosts(),
@@ -339,6 +330,7 @@ function findings() {
       errs.slice(-3).map((e) => e.code + ": " + e.msg),
       "more",
     );
+  measureFindings(add, t); // Erfolgskontrolle freigegebener Maßnahmen
   const sg = S.suggest || {},
     hasT = (id) => S.tasks.some((x) => !x.done && x.fid === id);
   return F.filter((f) => {
@@ -359,8 +351,7 @@ function pickTop(F) {
   }
   return o;
 }
-const fCard = (f) =>
-  `<div class="card rec ${f.sev >= 3 ? "bad" : f.sev === 2 ? "warn" : ""}"><div class="row sp"><b>${esc(f.title)}</b><span class="chip">${f.kind === "fakt" ? "Fakt" : "Annahme"}</span></div><div>${esc(f.action)}</div><details><summary class="mut">Warum sehe ich das?</summary>${f.why.map((w) => `<div class="mut">• ${esc(w)}</div>`).join("")}</details>${f.tab ? `<button class="s" data-a="tab" data-id="${esc(f.tab)}" style="margin-top:6px">${f.tab === "ai" ? "Tiefenanalyse" : "Öffnen"}</button>` : ""}<div class="row" style="margin-top:6px"><button class="s p" data-a="mk" data-id="${esc(f.id)}">Als Aufgabe anlegen</button><button class="s" data-a="later" data-id="${esc(f.id)}">Später</button><button class="s" data-a="nope" data-id="${esc(f.id)}">Nicht relevant</button></div></div>`;
+/* fCard (Darstellung eines Befunds) liegt in js/advice.js */
 function topHtml() {
   const F = findings(),
     top = pickTop(F);

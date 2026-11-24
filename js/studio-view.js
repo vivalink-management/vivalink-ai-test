@@ -6,7 +6,13 @@ const SFILES = {}; // vorbereitete Bilddateien je Beitrag (für „Teilen“ ohn
 const sm = () => studioMonth || (studioMonth = today().slice(0, 7));
 const monthName = (ym) => new Date(ym + "-15T12:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 const pillarName = (id) => (PILLARS.find((p) => p.id === id) || {}).name || id;
-const stChip = (p) => `<span class="chip st-${p.status}">${PSTATUS[p.status] || p.status}</span>`;
+const stChip = (p) => {
+  const s = postState(p);
+  return `<span class="chip st-${s.k}">${s.n}</span>`;
+};
+let stFilter = "alle";
+const FILTERS = { alle: "Alle", offen: "Zu prüfen", geplant: "Geplant", veroeffentlicht: "Veröffentlicht" };
+const passFilter = (p) => stFilter === "alle" || (stFilter === "offen" ? p.status === "entwurf" : stFilter === "geplant" ? p.status === "freigegeben" : p.status === stFilter);
 
 function brandMissing() {
   const b = S.studio.brand,
@@ -19,7 +25,7 @@ function brandMissing() {
 function vStudio() {
   const ym = sm(),
     all = livePosts(),
-    P = all.filter((p) => (p.date || "").startsWith(ym)).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    P = all.filter((p) => (p.date || "").startsWith(ym) && passFilter(p)).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time) || postPrio(b) - postPrio(a));
   const weeks = {};
   for (const p of P) (weeks[weekKey(p.date)] = weeks[weekKey(p.date)] || []).push(p);
   const undated = all.filter((p) => !p.date && p.status !== "abgelehnt");
@@ -32,8 +38,9 @@ function vStudio() {
 ${miss.length ? `<div class="card rec warn">Markenprofil vervollständigen: ${miss.join(", ")}. Ohne diese Angaben verweisen Beiträge nur auf die Website.<div class="row" style="margin-top:6px"><button class="s p" data-a="stBrand">Jetzt ergänzen</button></div></div>` : ""}
 <div class="stats"><div class="stat"><b>${cnt("entwurf")}</b><span>Entwürfe</span></div><div class="stat"><b>${cnt("freigegeben")}</b><span>freigegeben</span></div><div class="stat"><b>${cnt("veroeffentlicht")}</b><span>veröffentlicht</span></div><div class="stat"><b>${unrated.length}</b><span>ohne Auswertung</span></div></div>
 <div class="row sp"><button class="s" data-a="stMonth" data-id="-1">‹</button><h2 style="margin:0">${monthName(ym)}</h2><button class="s" data-a="stMonth" data-id="1">›</button></div>
-<div class="card"><b>Monatsplan</b><div class="mut">${slots} freie Termine (${S.studio.settings.perWeek} pro Woche, ${S.studio.settings.days.map((d) => WD[d]).join("/")}, ${S.studio.settings.time} Uhr). Die KI schreibt alle Beiträge mit Captions, Hashtags und Folientexten; die App gestaltet die Grafiken.</div>
-<div class="row" style="margin-top:8px"><button class="p" data-a="stPrompt">Monatsplan erstellen</button><button data-a="stNew">Einzelner Beitrag</button></div></div>
+<div class="chips">${Object.keys(FILTERS).map((k) => `<button class="${stFilter === k ? "on" : ""}" data-a="stFilter" data-id="${k}">${FILTERS[k]}</button>`).join("")}</div>
+<div class="card"><b>Monatsplan</b><div class="mut">${slots ? slots + " freie Termine" : "Alle Termine sind belegt"}${P.filter((p) => p.status !== "abgelehnt").length ? " (" + P.filter((p) => p.status !== "abgelehnt").length + " Beiträge geplant)" : ""} (${S.studio.settings.perWeek} pro Woche, ${S.studio.settings.days.map((d) => WD[d]).join("/")}, ${S.studio.settings.time} Uhr). Die KI schreibt alle Beiträge mit Captions, Hashtags und Folientexten; die App gestaltet die Grafiken.</div>
+<div class="row" style="margin-top:8px"><button class="p" data-a="stPrompt" ${slots ? "" : "disabled"}>${P.length ? "Freie Termine füllen" : "Monatsplan erstellen"}</button><button data-a="stNew">Einzelner Beitrag</button></div></div>
 ${Object.keys(weeks)
   .sort()
   .map((wk) => {
@@ -43,12 +50,12 @@ ${Object.keys(weeks)
     return `<h2>KW ${wk.split("-W")[1]} · ab ${fmt(weekMonday(L2[0].date))}</h2>${L2.map(postCard).join("")}${open.length ? `<div class="row"><button class="p" data-a="stApproveWeek" data-id="${esc(wk)}">Woche freigeben (${open.length - warned.length})</button>${warned.length ? `<span class="mut">${warned.length} mit Prüfhinweis – bitte einzeln prüfen</span>` : ""}</div>` : ""}`;
   })
   .join("")}
-${!P.length ? '<p class="mut">Für diesen Monat gibt es noch keine Beiträge. Tippe auf „Monatsplan erstellen“.</p>' : ""}
+${!P.length ? `<p class="mut">${stFilter === "alle" ? "Für diesen Monat gibt es noch keine Beiträge. Tippe auf „Monatsplan erstellen“." : "Keine Beiträge in dieser Auswahl."}</p>` : ""}
 ${undated.length ? `<h2>Ohne Termin</h2>${undated.map(postCard).join("")}` : ""}
 <h2>Auswertung</h2><div class="card">${L.n ? `<div>${esc(L.summary)}</div><div class="mut">Annahme auf Basis von ${L.n} ausgewerteten Beiträgen. Der Monatsplan berücksichtigt die Reihenfolge automatisch.</div>` : '<div class="mut">Noch keine Ergebnisse. Trage nach der Veröffentlichung Reichweite und Interaktionen ein (Beitrag öffnen → Ergebnisse).</div>'}${unrated.length ? `<div class="mut" style="margin-top:6px">${unrated.length} veröffentlichte Beiträge ohne Ergebnisse.</div>` : ""}</div>`;
 }
 function postCard(p) {
-  return `<div class="card row" data-a="stOpen" data-id="${esc(p.id)}" style="align-items:flex-start;flex-wrap:nowrap"><div class="thumb" data-thumb="${esc(p.id)}"></div><div style="flex:1;min-width:0"><div class="row sp"><b>${p.date ? WD[new Date(p.date + "T12:00").getDay()] + " " + fmt(p.date) : "ohne Datum"}</b>${stChip(p)}</div><div class="mut">${esc(PTYPES[p.type] || p.type)} · ${esc(pillarName(p.pillar))}${p.source === "regel" ? " · automatisch erkannt" : ""}</div><div style="overflow:hidden;text-overflow:ellipsis">${esc(p.title)}</div>${p.warnings && p.warnings.length ? `<div class="mut" style="color:var(--warn)">⚠️ ${p.warnings.length} Prüfhinweis(e)</div>` : ""}</div></div>`;
+  return `<div class="card row" data-a="stOpen" data-id="${esc(p.id)}" style="align-items:flex-start;flex-wrap:nowrap"><div class="thumb" data-thumb="${esc(p.id)}"></div><div style="flex:1;min-width:0"><div class="row sp"><b>${p.date ? WD[new Date(p.date + "T12:00").getDay()] + " " + fmt(p.date) : "ohne Datum"}</b>${stChip(p)}</div><div class="mut">${esc(PTYPES[p.type] || p.type)} · ${esc(pillarName(p.pillar))}${p.source === "regel" ? " · automatisch erkannt" : ""}</div><div style="overflow:hidden;text-overflow:ellipsis">${postPrio(p) === 2 ? '<span class="chip st-wichtig">Wichtig</span> ' : ""}${esc(p.title)}</div>${p.warnings && p.warnings.length ? `<div class="mut" style="color:var(--warn)">⚠️ ${p.warnings.length} Prüfhinweis(e) – Einzelfreigabe nötig</div>` : ""}${p.hints && p.hints.length ? `<div class="mut">ℹ️ ${p.hints.length} Stilhinweis(e)</div>` : ""}</div></div>`;
 }
 /* Kleine Vorschaubilder nachträglich zeichnen */
 const THUMB = {};
@@ -86,16 +93,17 @@ async function postSheet(id) {
 <label>Titel</label><input data-slide="${i}" data-f="title" value="${esc(s.title)}"><label>Text</label><textarea data-slide="${i}" data-f="text">${esc(s.text)}</textarea>${s.template === "ankuendigung" ? `<label>Details (Datum, Ort – je Zeile)</label><textarea data-slide="${i}" data-f="details">${esc(s.details)}</textarea>` : ""}</div>`;
   sheet(`<div class="row sp"><h1 style="flex:1">${esc(p.title)}</h1>${stChip(p)}</div>
 <div class="mut">${esc(PTYPES[p.type])} · ${esc(pillarName(p.pillar))} · ${p.date ? fmtLong(p.date) + ", " + esc(p.time) + " Uhr" : "ohne Datum"}${p.source === "regel" ? " · automatisch aus deinen Meetup-Daten erstellt" : p.source === "ki" ? " · von der KI geschrieben" : ""}</div>
-${p.warnings && p.warnings.length ? `<div class="card rec warn"><b>Prüfhinweise</b>${p.warnings.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}
+${p.warnings && p.warnings.length ? `<div class="card rec warn"><b>Prüfhinweise (bitte prüfen, vor Freigabe)</b>${p.warnings.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}${p.hints && p.hints.length ? `<div class="card rec"><b>Stilhinweise (optional)</b>${p.hints.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}<p class="mut" style="font-size:12px">Die Prüfung erkennt typische Probleme anhand deiner Daten. Aussagen, zu denen keine Daten vorliegen, kann sie nicht auf Wahrheit prüfen – deine Kontrolle bleibt nötig.</p>
 <div class="row" style="margin:8px 0"><button class="s ${story ? "" : "p"}" data-a="stView" data-id="feed">Feed</button><button class="s ${story ? "p" : ""}" data-a="stView" data-id="story">Story</button></div>
 <div id="stPrev" class="prev"></div>
 <h2>Caption</h2><div class="card"><p style="margin:0">${esc(postText(p))}</p></div>
 <div class="row"><button class="p" data-a="stShare">Teilen (Instagram)</button><button data-a="stSave">Bilder speichern</button><button data-a="stCopy">Caption kopieren</button></div>
-<div class="row" style="margin-top:8px">${p.status === "entwurf" ? `<button class="p" data-a="stSet" data-id="freigegeben">Freigeben</button><button data-a="stSet" data-id="abgelehnt">Ablehnen</button>` : ""}${p.status === "freigegeben" ? `<button class="p" data-a="stSet" data-id="veroeffentlicht">Als veröffentlicht markieren</button><button data-a="stSet" data-id="entwurf">Zurück zu Entwurf</button>` : ""}${p.status === "abgelehnt" ? `<button data-a="stSet" data-id="entwurf">Wieder als Entwurf</button>` : ""}</div>
+<div class="row" style="margin-top:8px">${p.status === "entwurf" ? `<button class="p" data-a="stSet" data-id="freigegeben">Freigeben</button><button data-a="stSet" data-id="abgelehnt">Ablehnen</button>` : ""}${p.status === "freigegeben" ? `<button class="p" data-a="stSet" data-id="veroeffentlicht" ${p.date && p.date > today() ? 'title="Geplant für ' + fmt(p.date) + '"' : ""}>Als veröffentlicht markieren</button><button data-a="stSet" data-id="entwurf">Zurück zu Entwurf</button>` : ""}${p.status === "abgelehnt" ? `<button data-a="stSet" data-id="entwurf">Wieder als Entwurf</button>` : ""}</div>
 ${p.status === "veroeffentlicht" ? metricsForm(p) : ""}
 ${p.type === "reel" ? `<h2>Reel</h2><label>Skript</label><textarea id="pr-script" style="min-height:120px">${esc(p.reel && p.reel.script)}</textarea><label>Szenen (je Zeile)</label><textarea id="pr-shots">${esc(((p.reel && p.reel.shots) || []).join("\n"))}</textarea>` : ""}
 <h2>Bearbeiten</h2><div class="row"><div style="flex:1"><label>Datum</label><input type="date" id="pe-date" value="${esc(p.date)}"></div><div style="flex:1"><label>Uhrzeit</label><input type="time" id="pe-time" value="${esc(p.time)}"></div></div>
 <label>Bereich</label><select id="pe-pillar">${PILLARS.map((q) => `<option value="${q.id}" ${q.id === p.pillar ? "selected" : ""}>${esc(q.name)}</option>`).join("")}</select>
+<label>Gestaltung</label><select id="pe-variant">${["Logo-Verlauf", "Violett", "Hell"].map((n, i) => `<option value="${i}" ${i === (p.variant || 0) ? "selected" : ""}>${n}</option>`).join("")}</select>
 <label>Format</label><select id="pe-type">${Object.keys(PTYPES).map((k) => `<option value="${k}" ${k === p.type ? "selected" : ""}>${PTYPES[k]}</option>`).join("")}</select>
 <label>Interner Titel</label><input id="pe-title" value="${esc(p.title)}"><label>Caption</label><textarea id="pe-caption" style="min-height:160px">${esc(p.caption)}</textarea><label>Hashtags</label><input id="pe-tags" value="${esc((p.hashtags || []).join(" "))}">
 ${p.slides.map(ed).join("")}<div class="row"><button data-a="stAddSlide">Folie hinzufügen</button>${p.slides.length > 1 ? `<button data-a="stDelSlide">Letzte Folie entfernen</button>` : ""}</div>
@@ -115,6 +123,7 @@ function readPostForm(p) {
   p.time = val("pe-time") || p.time;
   p.pillar = val("pe-pillar");
   p.type = val("pe-type");
+  p.variant = Number(val("pe-variant")) || 0;
   p.title = val("pe-title").trim() || p.title;
   p.caption = val("pe-caption");
   p.hashtags = [...new Set(val("pe-tags").split(/[\s,]+/).map(cleanTag).filter(Boolean))].slice(0, 8);
@@ -124,7 +133,13 @@ function readPostForm(p) {
   });
   if (p.type !== "karussell" && p.slides.length > 1) p.slides = [p.slides[0]];
   if (p.type === "reel") p.reel = { script: $("#pr-script") ? val("pr-script") : (p.reel && p.reel.script) || "", shots: $("#pr-shots") ? val("pr-shots").split("\n").map((s) => s.trim()).filter(Boolean) : (p.reel && p.reel.shots) || [] };
-  p.warnings = factCheck(p);
+  checkPost(p);
+  // Geänderter Inhalt nach Freigabe → zurück zu Entwurf, damit nur Freigegebenes veröffentlicht wird
+  if (p.status === "freigegeben" && p.approvedHash && p.approvedHash !== postHash(p)) {
+    p.status = "entwurf";
+    p.approvedHash = null;
+    p.reapprove = true;
+  }
   touch(p);
 }
 
@@ -167,6 +182,9 @@ async function studioAction(a, id, b) {
     const [y, m] = sm().split("-").map(Number);
     const d = new Date(y, m - 1 + Number(id), 1);
     studioMonth = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    render();
+  } else if (a === "stFilter") {
+    stFilter = id;
     render();
   } else if (a === "stOpen") {
     storyView = false;
@@ -211,17 +229,20 @@ async function studioAction(a, id, b) {
       return toast("Prüfhinweise beachten. Nochmal tippen, um trotzdem freizugeben.");
     }
     window._stw = null;
-    setStatus(p, id);
+    const name = id === "freigegeben" ? "post.approve" : id === "veroeffentlicht" ? "post.publish" : null;
+    const r = name ? await act(name, "gruender", () => setStatus(p, id) || { ok: true }) : (setStatus(p, id), { ok: true });
+    if (r && r.ok === false) return toast(r.error || r.why || "Nicht möglich");
     await save();
     render();
     postSheet(p.id);
-    toast(PSTATUS[id]);
+    toast(postState(p).n);
   } else if (a === "stEdit" && p) {
     readPostForm(p);
     await save();
     render();
     postSheet(p.id);
-    toast("Gespeichert" + (p.warnings.length ? " · " + p.warnings.length + " Prüfhinweis(e)" : ""));
+    toast("Gespeichert" + (p.reapprove ? " · nach der Änderung bitte erneut freigeben" : "") + (p.warnings.length ? " · " + p.warnings.length + " Prüfhinweis(e)" : ""));
+    delete p.reapprove;
   } else if (a === "stAddSlide" && p) {
     readPostForm(p);
     if (p.type !== "karussell") p.type = "karussell";

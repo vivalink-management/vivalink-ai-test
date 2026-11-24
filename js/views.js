@@ -1,15 +1,18 @@
 /* Ansichten */
+let showAllMet = false;
 function vHome() {
   const open = S.tasks.filter((x) => !x.done),
     act = S.memory.filter((m) => m.active),
     t = today();
+  const withVal = S.metrics.filter((m) => cur(m) || oldE(m));
+  const mets = showAllMet ? S.metrics : withVal;
   return (
     `<h1>Vivalink Management AI</h1><div class="mut">${new Date().toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" })}</div>
 <div class="stats"><div class="stat"><b>${open.length}</b><span>offen</span></div><div class="stat"><b>${open.filter((x) => x.due && x.due < t).length}</b><span>überfällig</span></div><div class="stat"><b>${act.length}</b><span>Wissen</span></div><div class="stat"><b>${act.filter((m) => m.cat === "Entscheidung").length}</b><span>Entscheidungen</span></div></div>
-<h2>Empfehlungen</h2>` +
+${statusHtml()}<h2>Empfehlungen</h2>` +
     topHtml() +
-    `${meetupHtml()}<h2>Kennzahlen</h2>${S.metrics.map(mCardHtml).join("")}${studioHomeCard()}<h2>Als Nächstes</h2><div class="row"><button class="p" data-a="newMem">Wissen eintragen</button><button data-a="newTask">Aufgabe anlegen</button><button data-a="tab" data-id="ai">Arbeitsauftrag</button></div>
-<p class="mut">Die KI-Beratung und das Instagram-Studio folgen in den nächsten Schritten.</p>`
+    `${goalsHtml()}${meetupHtml()}${studioHomeCard()}<h2>Kennzahlen</h2>${mets.length ? mets.map(mCardHtml).join("") : '<p class="mut">Noch keine Werte. Sie kommen später automatisch aus der Verwaltung oder du trägst sie ein.</p>'}<div class="row"><button class="s" data-a="allMet">${showAllMet ? "Nur Kennzahlen mit Werten" : "Alle Kennzahlen (" + S.metrics.length + ")"}</button></div>
+<h2>Als Nächstes</h2><div class="row"><button class="p" data-a="newMem">Wissen eintragen</button><button data-a="newTask">Aufgabe anlegen</button><button data-a="tab" data-id="ai">Arbeitsauftrag</button></div>`
   );
 }
 
@@ -25,8 +28,18 @@ function vTasks() {
       .filter((x) => !x.done)
       .sort((a, b) => PR[a.prio] - PR[b.prio] || (a.due || "9").localeCompare(b.due || "9")),
     d = S.tasks.filter((x) => x.done).sort((a, b) => b.doneAt - a.doneAt);
+  const msr = (x) =>
+    x.measure
+      ? `<div class="mut">Maßnahme · Prüfung ${fmt(x.measure.checkAt)} · ${esc(measureLine(x))}</div>${
+          x.measure.outcome
+            ? `<div class="mut">Ergebnis: ${esc(x.measure.outcome)} (Einschätzung)</div>`
+            : x.measure.checkAt <= today() || x.done
+              ? `<div class="row" style="margin-top:4px"><span class="mut">Hat es gewirkt?</span><button class="s" data-a="msrOut" data-id="${esc(x.id)}" data-v="wirksam">Ja</button><button class="s" data-a="msrOut" data-id="${esc(x.id)}" data-v="unklar">Unklar</button><button class="s" data-a="msrOut" data-id="${esc(x.id)}" data-v="nicht-wirksam">Nein</button></div><div class="mut" style="font-size:12px">Zeitlicher Zusammenhang – keine bewiesene Ursache.</div>`
+              : ""
+        }`
+      : "";
   const card = (x) =>
-    `<div class="card row sp"><div style="flex:1"><div class="${x.done ? "done" : ""}">${esc(x.title)}</div><div class="mut">${esc(x.prio)} · ${esc(x.area)}${x.due ? " · Frist " + fmt(x.due) : ""}${x.due && !x.done && x.due < today() ? " · überfällig" : ""}</div></div><button class="s" data-a="toggle" data-id="${esc(x.id)}">${x.done ? "Wieder öffnen" : "Erledigt"}</button></div>`;
+    `<div class="card row sp"><div style="flex:1"><div class="${x.done ? "done" : ""}">${esc(x.title)}</div><div class="mut">${esc(x.prio)} · ${esc(x.area)}${x.due ? " · Frist " + fmt(x.due) : ""}${x.due && !x.done && x.due < today() ? " · überfällig" : ""}</div>${msr(x)}</div><button class="s" data-a="toggle" data-id="${esc(x.id)}">${x.done ? "Wieder öffnen" : "Erledigt"}</button></div>`;
   return (
     `<div class="row sp"><h1>Aufgaben</h1><button class="p" data-a="newTask">Neu</button></div>` +
     (o.length ? o.map(card).join("") : '<p class="mut">Keine offenen Aufgaben. Lege die erste an.</p>') +
@@ -81,12 +94,13 @@ function vMem() {
 function vMore() {
   const gpu = "gpu" in navigator,
     oc = openConflicts();
-  return `<h1>Mehr</h1><h2>Backup</h2><div class="card"><div class="mut">Letztes Backup: ${S.lastBackup ? fmt(S.lastBackup) : "noch keines"}</div>
+  return `<h1>Mehr</h1><h2>Daten übertragen (optional)</h2><div class="card">
 <p class="mut">Optional: nur nötig, um Daten auf ein anderes Gerät zu übertragen, bis die Synchronisierung kommt. Das Backup enthält auch vertrauliche Einträge – nur in einer <b>gesperrten Notiz</b> oder als Datei aufbewahren.</p>
 <div class="row"><button class="p" data-a="exp">Backup kopieren</button><button data-a="expFile">Als Datei sichern</button></div>
 <label style="display:block;margin-top:12px">Backup einfügen, prüfen und zusammenführen</label><textarea id="imp" placeholder="Backup-Text hier einfügen"></textarea><div class="row"><button data-a="chkImp">Backup prüfen</button><button data-a="imp">Zusammenführen</button></div><div id="impRes"></div>
 ${PREIMP ? `<p class="mut">Rückgängig-Punkt vom ${new Date(PREIMP.at).toLocaleString("de-DE")} (${esc(PREIMP.label || "Import")}).</p><button data-a="undoImp">Letzten Import rückgängig machen</button>` : ""}</div>
-${IS_TEST && typeof demoCard === "function" ? demoCard() : ""}<h2>Automatische Sicherung</h2><div class="card"><p>Die App legt täglich automatisch einen Sicherungspunkt auf diesem Gerät an (die letzten 7 Tage). Manuelle Backups sind nicht nötig.</p><button data-a="snaps">Sicherungspunkte anzeigen</button></div>
+${IS_TEST && typeof demoCard === "function" ? demoCard() : ""}<h2>Synchronisierung iPhone ↔ iPad</h2><div class="card"><p class="mut">${syncUrl() ? "Ende-zu-Ende verschlüsselt. Hält deine Geräte automatisch auf demselben Stand." : "Vorbereitet, noch nicht freigegeben (kostenloser Speicher wird nach deiner Entscheidung eingerichtet)."}</p><button data-a="sync">Synchronisierung</button></div>
+<h2>Automatische Sicherung</h2><div class="card"><p>Die App legt täglich automatisch einen Sicherungspunkt auf diesem Gerät an (die letzten 7 Tage). Manuelle Backups sind nicht nötig.</p><button data-a="snaps">Sicherungspunkte anzeigen</button></div>
 <h2>Datenkonflikte</h2>${oc.length ? `<p class="mut">Derselbe Eintrag wurde auf zwei Geräten unterschiedlich geändert. Bis zu deiner Entscheidung gilt die neuere Version. Nichts wurde gelöscht.</p>` + oc.map(conflictHtml).join("") : '<div class="card mut">Keine offenen Konflikte.</div>'}
 <h2>Diagnose</h2><div class="card"><p>Technischer Zustand, Speichertest, Integritätsprüfung und Fehlerprotokoll. Der Diagnosebericht enthält keine Inhalte aus Gedächtnis, Aufgaben oder Kennzahlen.</p><button class="p" data-a="diag">Diagnose öffnen</button></div>
 <h2>Gerätetest für lokale KI</h2><div class="card">WebGPU: <b>${gpu ? "verfügbar" : "nicht verfügbar"}</b><p class="mut">${gpu ? "Dein Gerät kann voraussichtlich ein kleines lokales KI-Modell ausführen. Den echten Leistungstest bauen wir im nächsten Schritt." : "Ohne WebGPU läuft keine lokale KI im Browser. Prüfe unter iOS Einstellungen › Apps › Safari › Erweitert › Funktionen, ob WebGPU aktiv ist."}</p></div>

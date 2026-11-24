@@ -71,6 +71,7 @@ async function save() {
     toast("Speichern auf diesem Gerät nicht möglich");
     return false;
   }
+  if (typeof syncSoon === "function") syncSoon(); // nur aktiv, wenn Synchronisierung freigegeben und eingerichtet
   return true;
 }
 /* Jede Änderung merkt sich, auf welchem Stand sie beruht (revs). So erkennt das Zusammenführen,
