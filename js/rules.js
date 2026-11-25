@@ -335,6 +335,9 @@ function findings() {
   for (const a of typeof AUTO_STATE !== "undefined" ? AUTO_STATE : [])
     if (a.state === "ausgeblieben" || a.state === "fehler")
       add("sys-auto-" + a.id, "system", 2, "fakt", "Geplante Aufgabe „" + a.name + "“: " + (a.state === "fehler" ? "Problem gemeldet" : "Ausführung ausgeblieben"), "Unter „Mehr › Autonomie“ ansehen. Häufige Ursache: Kontingent des Claude-Abos erschöpft oder Aufgabe pausiert.", [a.label, a.lastOk ? "Letzter belegter Erfolg: " + new Date(a.lastOk.at).toLocaleDateString("de-DE") : "Noch kein belegter Erfolg"], "more");
+  // Anbindung der Verwaltung gestört (nur wenn eingerichtet)
+  const kf = typeof kpiFinding === "function" ? kpiFinding() : null;
+  if (kf) add("sys-kpi", "system", 2, "fakt", kf.title, kf.detail, ["Mehr › Verwaltung"], "more");
   const sg = S.suggest || {},
     hasT = (id) => S.tasks.some((x) => !x.done && x.fid === id);
   return F.filter((f) => {

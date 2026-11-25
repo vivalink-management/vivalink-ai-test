@@ -548,6 +548,7 @@ document.addEventListener("change", (e) => {
   await loadActions();
   await loadProposals();
   await loadAutoState();
+  await loadKpiState();
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   } catch (e) {}

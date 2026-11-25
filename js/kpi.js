@@ -30,65 +30,107 @@ function validateKpis(j) {
   return { ok: true, values: vals, ignored: j.values.length - vals.length };
 }
 const kpiCfg = async () => (await kvGet("kpi-config")) || null;
+/* Zustand für Befunde (synchron lesbar im Regelmotor), aktualisiert beim Start und nach jedem Abruf */
+let KPI_STATE = null;
+const loadKpiState = async () => (KPI_STATE = kpiUrl() ? await kpiCfg() : null);
+const KPI_TIMEOUT = 15000;
+async function kpiFetch(path, opt = {}) {
+  const ac = typeof AbortController === "function" ? new AbortController() : null;
+  const tm = ac && setTimeout(() => ac.abort(), KPI_TIMEOUT);
+  try {
+    return await fetch(kpiUrl().replace(/\/$/, "") + path, { ...opt, cache: "no-store", signal: ac && ac.signal });
+  } finally {
+    clearTimeout(tm);
+  }
+}
 /* Einmal-Kopplung: Code aus der Verwaltung gegen einen widerrufbaren Gerätezugang tauschen */
 async function kpiPair(code) {
   if (!kpiUrl()) return { ok: false, error: "Anbindung noch nicht freigegeben" };
-  if (!/^\d{6,8}$/.test(String(code || ""))) return { ok: false, error: "Ungültiger Kopplungscode" };
+  code = String(code || "").replace(/\D/g, "");
+  if (!/^\d{6,8}$/.test(code)) return { ok: false, error: "Ungültiger Kopplungscode" };
   try {
-    const r = await fetch(kpiUrl().replace(/\/$/, "") + "/pair", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: String(code), device: S.dev }) });
-    if (!r.ok) return { ok: false, error: r.status === 401 || r.status === 410 ? "Code ungültig oder abgelaufen" : "Verwaltung nicht erreichbar (" + r.status + ")" };
+    const r = await kpiFetch("/pair", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, device: S.dev }) });
+    if (!r.ok) return { ok: false, error: r.status === 401 || r.status === 410 ? "Code ungültig oder abgelaufen" : r.status === 429 ? "Zu viele Fehlversuche – in 10 Minuten neuen Code erzeugen" : "Verwaltung nicht erreichbar (" + r.status + ")" };
     const j = await r.json();
-    if (!j || typeof j.token !== "string" || j.token.length < 32) return { ok: false, error: "Ungültige Antwort der Verwaltung" };
-    await kvPut("kpi-config", { token: j.token, since: Date.now(), last: null });
+    if (!j || typeof j.token !== "string" || !/^[0-9a-f]{64}$/.test(j.token)) return { ok: false, error: "Ungültige Antwort der Verwaltung" };
+    await kvPut("kpi-config", { token: j.token, since: Date.now(), last: null, fails: 0, lastError: null, revoked: null });
+    await loadKpiState();
     logEvent("info", "kpi.pair", "Gerät mit der Verwaltung gekoppelt");
     return { ok: true };
   } catch (e) {
     return { ok: false, error: "Verwaltung nicht erreichbar" };
   }
 }
+async function kpiFail(cfg, msg, extra = {}) {
+  Object.assign(cfg, { fails: (cfg.fails || 0) + 1, lastError: { at: Date.now(), msg } }, extra);
+  await kvPut("kpi-config", cfg);
+  await loadKpiState();
+  return { ok: false, error: msg };
+}
 /* Kennzahlen abrufen, streng prüfen und als Historie speichern */
 async function kpiSync() {
   const cfg = await kpiCfg();
   if (!kpiUrl() || !cfg) return { ok: false, error: "Nicht eingerichtet" };
+  if (cfg.revoked) return { ok: false, error: "Zugang widerrufen – bitte neu koppeln" };
   let j;
   try {
-    const r = await fetch(kpiUrl().replace(/\/$/, "") + "/kpis", { headers: { authorization: "Bearer " + cfg.token }, cache: "no-store" });
+    const r = await kpiFetch("/kpis", { headers: { authorization: "Bearer " + cfg.token } });
     if (r.status === 401 || r.status === 403) {
       logEvent("warn", "kpi.revoked", "Zugang widerrufen oder abgelaufen");
-      return { ok: false, error: "Zugang widerrufen – bitte neu koppeln" };
+      logAction("kpi.fetch", "auto", false, "Zugang widerrufen");
+      return kpiFail(cfg, "Zugang widerrufen – bitte neu koppeln", { revoked: Date.now() });
     }
-    if (!r.ok) throw new Error("Status " + r.status);
+    if (r.status === 429) throw new Error("Zu viele Abrufe – später erneut");
+    if (!r.ok) throw new Error("Verwaltung nicht erreichbar (" + r.status + ")");
     j = await r.json();
   } catch (e) {
-    logEvent("warn", "kpi.fetch", e.message || "Abruf fehlgeschlagen");
-    return { ok: false, error: "Verwaltung nicht erreichbar" };
+    const msg = e && /^(Zu viele|Verwaltung)/.test(e.message) ? e.message : "Verwaltung nicht erreichbar";
+    logEvent("warn", "kpi.fetch", msg);
+    logAction("kpi.fetch", "auto", false, msg);
+    return kpiFail(cfg, msg);
   }
   const v = validateKpis(j);
   if (!v.ok) {
     logEvent("error", "kpi.reject", v.error);
     logAction("kpi.fetch", "auto", false, v.error);
-    return v;
+    return kpiFail(cfg, v.error);
   }
   let n = 0;
-  for (const x of v.values) if (ingest(x.key, x.date, x.value, "verwaltung")) n++;
-  cfg.last = Date.now();
+  for (const x of v.values) {
+    const m = S.metrics.find((y) => y.key === x.key);
+    if (m && addVal(m.id, { date: x.date, value: Math.round(x.value * 100) / 100, status: "confirmed", src: "verwaltung" })) n++;
+  }
+  Object.assign(cfg, { last: Date.now(), fails: 0, lastError: null, count: v.values.length });
   await kvPut("kpi-config", cfg);
+  await loadKpiState();
   await save();
-  logEvent("info", "kpi.ok", n + " Werte übernommen");
-  logAction("kpi.fetch", "auto", true, n + " Werte");
-  return { ok: true, n, ignored: v.ignored };
+  logEvent("info", "kpi.ok", n + " Werte neu oder geändert");
+  logAction("kpi.fetch", "auto", true, v.values.length + " Werte, " + n + " neu oder geändert");
+  return { ok: true, n, total: v.values.length, ignored: v.ignored };
 }
 
-/* Im Zyklus: höchstens alle 6 Stunden abrufen (Stufe 0, nur lesend) */
+/* Im Zyklus: höchstens alle 6 Stunden abrufen (Stufe 0, nur lesend). Nach Fehlern wachsende Pause
+   (30 Minuten, verdoppelt bis höchstens 8 Stunden), nach Widerruf kein Abruf mehr bis zur neuen Kopplung. */
 async function kpiAuto() {
   const cfg = await kpiCfg();
-  if (!kpiUrl() || !cfg || navigator.onLine === false) return null;
+  if (!kpiUrl() || !cfg || cfg.revoked || navigator.onLine === false) return cfg && cfg.revoked ? "Verwaltung: Zugang widerrufen – bitte neu koppeln" : null;
   if (cfg.last && Date.now() - cfg.last < 6 * 3600e3) return null;
+  if (cfg.lastError && Date.now() - cfg.lastError.at < Math.min(8 * 3600e3, 30 * 60e3 * 2 ** Math.max(0, (cfg.fails || 1) - 1))) return null;
   const r = await kpiSync();
-  return r.ok ? r.n + " Kennzahlen aus der Verwaltung" : "Verwaltung: " + r.error;
+  return r.ok ? r.total + " Kennzahlen aus der Verwaltung (" + r.n + " neu oder geändert)" : "Verwaltung: " + r.error;
+}
+/* Befund, wenn die Anbindung nicht mehr funktioniert (Grundlage für die automatische Auswertung fehlt) */
+function kpiFinding() {
+  const c = KPI_STATE;
+  if (!c) return null;
+  if (c.revoked) return { title: "Verwaltung: Zugang widerrufen", detail: "Kennzahlen werden nicht mehr automatisch übernommen. Unter „Mehr › Verwaltung“ neu koppeln." };
+  const since = c.last || c.since;
+  if ((c.fails || 0) >= 3 && Date.now() - since > 24 * 3600e3) return { title: "Verwaltung: Kennzahlen seit " + Math.round((Date.now() - since) / 3600e3) + " Stunden nicht abrufbar", detail: "Letzter Fehler: " + ((c.lastError && c.lastError.msg) || "unbekannt") + ". Die App versucht es automatisch weiter." };
+  return null;
 }
 async function kpiRemove() {
   await kvPut("kpi-config", null);
+  await loadKpiState();
   logEvent("info", "kpi.remove", "Kopplung mit der Verwaltung entfernt");
 }
 /* ---------- Oberfläche („Mehr › Kennzahlen aus der Verwaltung“) ---------- */
@@ -98,9 +140,9 @@ async function kpiSheet() {
   sheet(`<h1>Kennzahlen aus der Verwaltung</h1><p class="mut">Nur zusammengefasste Zahlen (z. B. Registrierungen, aktive Nutzer, Anmeldungen) aus den vorhandenen Auswertungen der Vivalink-Verwaltung. Keine Personendaten; Antworten mit unbekannten Feldern werden komplett abgelehnt.</p>${
     !kpiUrl()
       ? '<div class="card rec warn">Vorbereitet. Die Gegenstelle in der Verwaltung (Supabase) ist noch nicht eingerichtet – das braucht deine gesonderte Freigabe (Anleitung: docs/AUFTRAG-VERWALTUNG.md). Bis dahin trägst du Kennzahlen auf der Startseite ein.</div>'
-      : cfg
-        ? `<div class="card"><div>Status: <b>gekoppelt</b></div><div class="mut">Zuletzt abgerufen: ${cfg.last ? new Date(cfg.last).toLocaleString("de-DE") : "noch nie"} · übernommene Werte: ${fromV}</div><div class="mut">Abruf automatisch höchstens alle 6 Stunden beim Öffnen der App.</div></div><div class="row"><button class="p" data-a="kpNow">Jetzt abrufen</button><button data-a="kpOff">Kopplung entfernen</button></div>`
-        : `<div class="card"><b>Mit der Verwaltung koppeln</b><p class="mut">In der Verwaltung unter „Management AI“ einen Kopplungscode erzeugen (6–8 Ziffern, 10 Minuten gültig) und hier eingeben.</p><input id="kpCode" inputmode="numeric" autocomplete="off" placeholder="Kopplungscode"><button class="p" data-a="kpPair">Koppeln</button></div>`
+      : cfg && !cfg.revoked
+        ? `<div class="card"><div>Status: <b>${cfg.lastError ? "Problem beim Abruf" : "gekoppelt"}</b></div><div class="mut">Zuletzt abgerufen: ${cfg.last ? new Date(cfg.last).toLocaleString("de-DE") : "noch nie"} · übernommene Werte: ${fromV}</div>${cfg.lastError ? `<div class="mut">Letzter Fehler (${new Date(cfg.lastError.at).toLocaleString("de-DE")}): ${esc(cfg.lastError.msg)} – neuer Versuch automatisch.</div>` : ""}<div class="mut">Abruf automatisch höchstens alle 6 Stunden beim Öffnen der App.</div></div><div class="row"><button class="p" data-a="kpNow">Jetzt abrufen</button><button data-a="kpOff">Kopplung entfernen</button></div>`
+        : `${cfg && cfg.revoked ? '<div class="card rec warn" id="kpRevoked">Der Zugang wurde in der Verwaltung widerrufen. Bisherige Kennzahlen bleiben erhalten. Für neue Werte einen neuen Kopplungscode erzeugen und hier eingeben.</div>' : ""}<div class="card"><b>Mit der Verwaltung koppeln</b><p class="mut">In der Verwaltung unter „Management AI“ einen Kopplungscode erzeugen (6–8 Ziffern, 10 Minuten gültig) und hier eingeben.</p><input id="kpCode" inputmode="numeric" autocomplete="off" placeholder="Kopplungscode"><button class="p" data-a="kpPair">Koppeln</button></div>`
   }<button data-a="close">Schließen</button>`);
 }
 async function kpiAction(a) {
@@ -109,13 +151,13 @@ async function kpiAction(a) {
     const r = await kpiPair(val("kpCode").trim());
     if (!r.ok) return toast(r.error);
     const s = await kpiSync(); // protokolliert selbst
-    toast("Gekoppelt" + (s.ok ? " · " + s.n + " Werte übernommen" : ""));
+    toast("Gekoppelt" + (s.ok ? " · " + s.total + " Werte übernommen" : " · " + s.error));
     render();
     return kpiSheet();
   }
   if (a === "kpNow") {
     const s = await kpiSync();
-    toast(s.ok ? s.n + " Werte übernommen" : s.error);
+    toast(s.ok ? s.total + " Werte abgerufen, " + s.n + " neu oder geändert" : s.error);
     render();
     return kpiSheet();
   }
