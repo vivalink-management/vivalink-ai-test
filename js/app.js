@@ -410,7 +410,48 @@ document.addEventListener("click", async (e) => {
   } else if (a.startsWith("demo") && IS_TEST && typeof demoAction === "function") demoAction(a);
   else if (a.startsWith("st")) studioAction(a, id, b);
   else if (a === "snaps") snapSheet();
-  else if (a === "sync" || a.startsWith("sy")) syncAction(a);
+  else if (a === "report") reportSheet();
+  else if (a === "wrCopy") {
+    try {
+      await navigator.clipboard.writeText(val("wr"));
+      toast("Wochenbericht kopiert");
+    } catch (x) {
+      $("#wr").select();
+      toast("Markiert. Bitte manuell kopieren.");
+    }
+  } else if (a === "wrSave") {
+    const r = weeklyReport();
+    if (S.memory.some((m) => m.active && m.title === "Wochenbericht " + fmt(r.start) + " – " + fmt(r.end))) return toast("Dieser Wochenbericht ist bereits gespeichert");
+    const n = { id: uid(), cat: "Ziele", title: "Wochenbericht " + fmt(r.start) + " – " + fmt(r.end), text: r.text, status: "confirmed", date: today(), reason: "Automatisch aus den App-Daten erstellt", result: "", private: false, active: true, createdAt: Date.now(), dev: S.dev };
+    touch(n);
+    S.memory.push(n);
+    await save();
+    close();
+    render();
+    toast("Wochenbericht im Gedächtnis abgelegt");
+  } else if (a === "ansTasks") {
+    const r = parseActions(val("ans"));
+    if (!r.ok) return toast(r.error);
+    window._acts = r.items;
+    sheet(`<h1>Aufgaben übernehmen</h1><p class="mut">Vorschläge aus der KI-Antwort. Angehakte werden als Aufgaben angelegt. Geschäftliche Entscheidungen (Preise, Zahlungen, Werbung, Verträge) erscheinen unter „Entscheidungen für dich“.</p>${r.items
+      .map(
+        (it) =>
+          `<label class="card" style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" data-act="${it.n}" ${it.dup ? "" : "checked"} style="width:auto;margin-top:4px"><span><b>${it.n}. ${esc(it.title)}</b><span class="mut" style="display:block">${esc(it.prio)} · ${esc(it.decision ? "Entscheidung nötig" : it.area)}${it.due ? " · Frist " + fmt(it.due) : ""}${it.after ? " · nach Nr. " + it.after : ""}</span>${it.why ? `<span class="mut" style="display:block">${esc(it.why)}</span>` : ""}${it.dup ? `<span class="mut" style="display:block;color:var(--warn)">Ähnliche Aufgabe vorhanden: „${esc(it.dup)}“</span>` : ""}</span></label>`,
+      )
+      .join("")}<div class="row"><button class="p" data-a="ansApply">Übernehmen</button><button data-a="close">Abbrechen</button></div>`);
+  } else if (a === "ansApply") {
+    const chosen = [...document.querySelectorAll("[data-act]")].filter((e) => e.checked).map((e) => +e.dataset.act);
+    if (!chosen.length) return toast("Nichts ausgewählt");
+    const r = await act("ai.tasks", "gruender", () => {
+      const made = applyActions(window._acts || [], chosen);
+      return { ok: true, made, detail: made.length + " Aufgabe(n) aus KI-Antwort" };
+    });
+    await save();
+    close();
+    tab = "tasks";
+    render();
+    toast(r.made.length + " Aufgabe(n) angelegt");
+  } else if (a === "sync" || a.startsWith("sy")) syncAction(a);
   else if (a === "auto" || a.startsWith("au")) autonomyAction(a, id);
   else if (a === "msr") {
     const x = await act("measure.start", "gruender", () => startMeasure(id, Number(b.dataset.v)));

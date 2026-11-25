@@ -13,6 +13,8 @@ const POLICY = {
   "grant.manage": { lvl: 2, n: "Berechtigungen erteilen oder widerrufen" },
   "task.setup": { lvl: 2, n: "Aufgaben-Kanal für geplante KI-Aufgaben einrichten" },
   "task.publish": { lvl: 1, n: "Auftrag mit öffentlichen Fakten für die geplante KI-Aufgabe bereitstellen" },
+  "repair.auto": { lvl: 1, n: "Eindeutige Datenfehler reparieren (verwaiste Verweise, ungültige Fristen)" },
+  "ai.tasks": { lvl: 2, n: "Aufgaben aus einer KI-Antwort anlegen" },
   "task.fetch": { lvl: 0, n: "Ergebnisse der geplanten KI-Aufgabe als Entwürfe übernehmen" },
   "measure.start": { lvl: 2, n: "Maßnahme starten" },
   "post.approve": { lvl: 2, n: "Instagram-Beitrag freigeben" },

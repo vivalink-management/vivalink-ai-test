@@ -92,6 +92,8 @@ function cleanTask(r) {
   if (r.fid != null) o.fid = str(r.fid, 80);
   if (r.src != null) o.src = str(r.src, 40);
   o.after = isId(r.after) ? r.after : "";
+  if (r.decision) o.decision = true;
+  if (r.why != null) o.why = str(r.why, 300);
   o.deleted = !!r.deleted;
   return o;
 }

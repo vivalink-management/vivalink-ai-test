@@ -72,7 +72,9 @@ async function cycleOnce(reason, T) {
   const step = (k, n, note) => rep.steps.push({ k, n, note });
   const t = today();
   // 1. Daten: lokal, optional Synchronisierung und Verwaltung (je nach Anbindung)
-  step("erfassen", null, [syncUrl() ? "Synchronisierung angebunden" : "Synchronisierung nicht angebunden", window.VL_KPI_URL ? "Verwaltung angebunden" : "Kennzahlen manuell"].join(" · "));
+  // Eindeutige Datenfehler selbst beheben (Stufe 1: mit Rückgängig-Punkt und Protokoll)
+  const rp = await autoRepair(T);
+  step("erfassen", rp.n || null, [syncUrl() ? "Synchronisierung angebunden" : "Synchronisierung nicht angebunden", window.VL_KPI_URL ? "Verwaltung angebunden" : "Kennzahlen manuell", rp.n ? rp.n + " Datenfehler behoben" : null].filter(Boolean).join(" · "));
   // 2. Analyse (Regelmotor)
   const F = findings();
   step("analysieren", F.length, F.filter((f) => f.sev >= 2).length + " davon dringend");
@@ -109,6 +111,13 @@ async function cycleOnce(reason, T) {
   // 8. Prüfen: Maßnahmen mit erreichtem Prüftermin
   const rev = T.tasks.filter((x) => x.measure && !x.deleted && !x.measure.outcome && x.measure.checkAt <= t).length;
   step("pruefen", rev, rev ? "Maßnahmen auswerten" : "nichts offen");
+  // Wochenbericht einmal je Woche ablegen (die letzten 8)
+  const wk = weekKey(t);
+  const reps = (await kvGet("reports")) || [];
+  if (!reps.some((r) => r.wk === wk)) {
+    const w = weeklyReport(T);
+    await kvPut("reports", [{ wk, at: Date.now(), text: w.text }, ...reps].slice(0, 8));
+  }
   await kvPut("cycle-last", rep);
   return rep;
 }
