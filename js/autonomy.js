@@ -74,7 +74,8 @@ async function cycleOnce(reason, T) {
   // 1. Daten: lokal, optional Synchronisierung und Verwaltung (je nach Anbindung)
   // Eindeutige Datenfehler selbst beheben (Stufe 1: mit Rückgängig-Punkt und Protokoll)
   const rp = await autoRepair(T);
-  step("erfassen", rp.n || null, [syncUrl() ? "Synchronisierung angebunden" : "Synchronisierung nicht angebunden", window.VL_KPI_URL ? "Verwaltung angebunden" : "Kennzahlen manuell", rp.n ? rp.n + " Datenfehler behoben" : null].filter(Boolean).join(" · "));
+  const tk = await taskAuto();
+  step("erfassen", rp.n || null, [syncUrl() ? "Synchronisierung angebunden" : "Synchronisierung nicht angebunden", window.VL_KPI_URL ? "Verwaltung angebunden" : "Kennzahlen manuell", rp.n ? rp.n + " Datenfehler behoben" : null, tk].filter(Boolean).join(" · "));
   // 2. Analyse (Regelmotor)
   const F = findings();
   step("analysieren", F.length, F.filter((f) => f.sev >= 2).length + " davon dringend");
@@ -122,24 +123,57 @@ async function cycleOnce(reason, T) {
   return rep;
 }
 
-/* ---------- Aufgaben-Kanal für geplante KI-Aufgaben (vorbereitet) ----------
-   Die App legt einen Auftrag mit ausschließlich öffentlichen Fakten verschlüsselt im Postfach „out“ ab.
-   Eine geplante Claude-Aufgabe holt ihn mit dem Aufgaben-Schlüssel (scripts/ki-aufgabe.mjs), schreibt Entwürfe
-   und legt sie verschlüsselt im Postfach „in“ ab. Die App übernimmt sie nur als Entwürfe (Prüfung wie immer).
-   Der Aufgaben-Schlüssel öffnet nur diese beiden Postfächer, nie den Daten-Tresor. */
+/* ---------- Aufgaben-Postfach für geplante Claude-Aufgaben ----------
+   Die App legt einen Auftrag im Postfach „out“ ab:
+   - Instagram: freie Termine der nächsten 14 Tage, Regeln, nur öffentliche Fakten
+   - Wochenanalyse: Wochenbericht, zusammengefasste Kennzahlen, Aufgaben, Befunde (ohne vertrauliche Einträge, ohne Personendaten)
+   Die geplante Claude-Aufgabe holt ihn (scripts/ki-aufgabe.mjs), schreibt Entwürfe, Analyse und Aufgabenvorschläge und
+   legt das Ergebnis im Postfach „in“ ab. Die App übernimmt Beiträge nur als Entwürfe, die Analyse als Einschätzung und
+   Aufgaben nur als Vorschläge, die du bestätigst.
+   Zugang: zufälliges Token (256 Bit). In der App gespeichert; in der Claude-Umgebung als geschützter Netzwerkschlüssel,
+   den der Proxy einsetzt – die Claude-Sitzung sieht es nie. Das Token öffnet nur diese beiden Postfächer, nie den Daten-Tresor. */
 const TASK_FORMAT = "vivalink-task",
   TASK_RESULT = "vivalink-task-result";
-async function taskAccess(tk, box) {
-  const id = (await hexOf("vivalink-task-id:" + box + ":" + tk)).slice(0, 32);
-  return { id, token: await hexOf("vivalink-task-token:" + box + ":" + tk), aad: "task|" + box + "|" + id, key: await hkdfKey(unb64(tk), "vivalink-task|" + box, "vivalink-task-v1") };
+const taskCfg = async () => {
+  const c = await kvGet("task-config");
+  return c && /^[0-9a-f]{64}$/.test(c.token || "") ? c : null; // ältere Entwurfs-Konfiguration ohne Token wird ignoriert
+};
+function taskHttp(base, token) {
+  const u = (box) => base.replace(/\/$/, "") + "/v1/task/" + box;
+  const h = (x) => ({ "x-vl-task-token": token, ...(x || {}) });
+  return {
+    async get(box) {
+      const r = await fetch(u(box), { headers: h(), cache: "no-store" });
+      if (r.status === 404) return null;
+      if (!r.ok) throw Object.assign(new Error("Server " + r.status), { status: r.status });
+      return r.json();
+    },
+    async put(box, body, expected) {
+      const r = await fetch(u(box), { method: "PUT", headers: h({ "content-type": "application/json" }), body: JSON.stringify({ body, expected }) });
+      if (r.status === 409) return { conflict: true, ...(await r.json()) };
+      if (!r.ok) throw Object.assign(new Error("Server " + r.status), { status: r.status });
+      return r.json();
+    },
+    async del(box) {
+      await fetch(u(box), { method: "DELETE", headers: h() });
+    },
+  };
 }
-const taskCfg = async () => (await kvGet("task-config")) || null;
 async function taskSetup() {
-  const tk = b64(rnd(32));
-  await kvPut("task-config", { tk, since: Date.now(), lastOut: 0, lastIn: 0, done: [] });
-  return { ok: true, tk, detail: "Aufgaben-Kanal eingerichtet" };
+  const token = hexOfBytes(rnd(32));
+  await kvPut("task-config", { token, since: Date.now(), lastOut: 0, lastIn: 0, done: [] });
+  return { ok: true, token, detail: "Aufgaben-Postfach eingerichtet" };
 }
-/* Auftrag: nur öffentliche Fakten (ohne Typ „intern“), freie Termine der nächsten 14 Tage, Regeln und Format */
+/* Wochenanalyse-Auftrag aus dem vorhandenen Arbeitsauftrag „Wochenplan“ (ohne vertrauliche Einträge) */
+function analysisPrompt() {
+  const keep = ai;
+  ai = { k: "week", extra: "", compact: false, tasks: true, priv: false, cats: [...TC.week] };
+  try {
+    return buildPrompt();
+  } finally {
+    ai = keep;
+  }
+}
 function taskPackage(T = S) {
   const pub = { ...T, memory: T.memory.filter((m) => m.cat !== "Geschäftsmodell") };
   const ym = today().slice(0, 7);
@@ -147,47 +181,92 @@ function taskPackage(T = S) {
   const slots = planSlots(ym, pub)
     .concat(planSlots(nextMonth(ym), pub))
     .filter((s) => s.date <= lim);
-  return { format: TASK_FORMAT, version: 1, id: uid(), kind: "studio.drafts", createdAt: new Date().toISOString(), slots, prompt: slots.length ? studioPrompt(ym, pub, slots) : "", answerFormat: PLAN_FORMAT };
+  return {
+    format: TASK_FORMAT,
+    version: 2,
+    id: uid(),
+    createdAt: new Date().toISOString(),
+    studio: { slots, prompt: slots.length ? studioPrompt(ym, pub, slots) : "", answerFormat: PLAN_FORMAT },
+    analyse: { report: weeklyReport(T).text, prompt: analysisPrompt(), answerFormat: ACT_FORMAT },
+  };
 }
-async function taskPublish(t = null) {
+async function taskPublish(api = null) {
   const c = await taskCfg();
-  if (!c) return { ok: false, error: "Aufgaben-Kanal nicht eingerichtet" };
-  const T = transport(t),
-    K = await taskAccess(c.tk, "out");
+  if (!c) return { ok: false, error: "Aufgaben-Postfach nicht eingerichtet" };
+  const A = api || taskHttp(syncUrl(), c.token);
   const pkg = taskPackage();
-  if (!pkg.slots.length) return { ok: true, n: 0, detail: "keine freien Termine in 14 Tagen" };
   for (let i = 0; i < 3; i++) {
-    const cur = await T.get(K);
-    const r = await T.put(K, await seal(K, pkg), cur ? cur.version : 0);
+    const cur = await A.get("out");
+    const r = await A.put("out", JSON.stringify(pkg), cur ? cur.version : 0);
     if (r.conflict) continue;
     c.lastOut = Date.now();
     await kvPut("task-config", c);
-    return { ok: true, n: pkg.slots.length, id: pkg.id, detail: pkg.slots.length + " Termine bereitgestellt" };
+    return { ok: true, n: pkg.studio.slots.length, id: pkg.id, detail: "Auftrag bereitgestellt (" + pkg.studio.slots.length + " Termine, Wochenanalyse)" };
   }
   return { ok: false, error: "Postfach belegt – später erneut" };
 }
-async function taskFetch(t = null) {
+let PROPOSALS = [];
+const loadProposals = async () => (PROPOSALS = (await kvGet("proposals")) || []);
+async function taskFetch(api = null) {
   const c = await taskCfg();
-  if (!c) return { ok: false, error: "Aufgaben-Kanal nicht eingerichtet" };
-  const T = transport(t),
-    K = await taskAccess(c.tk, "in");
-  const cur = await T.get(K);
+  if (!c) return { ok: false, error: "Aufgaben-Postfach nicht eingerichtet" };
+  const A = api || taskHttp(syncUrl(), c.token);
+  const cur = await A.get("in");
   if (!cur) return { ok: true, added: 0, detail: "keine Ergebnisse" };
   let o;
   try {
-    o = await unseal(K, cur.blob);
+    o = JSON.parse(cur.body);
   } catch (e) {
     return { ok: false, error: "Ergebnis nicht lesbar – nichts übernommen" };
   }
   if (!o || o.format !== TASK_RESULT || !isId(o.id)) return { ok: false, error: "Unbekanntes Ergebnisformat – nichts übernommen" };
   if ((c.done || []).includes(o.id)) return { ok: true, added: 0, detail: "bereits übernommen" };
-  const r = importPlan(typeof o.answer === "string" ? o.answer : JSON.stringify(o.answer || {}), S, "ki-aufgabe");
-  if (!r.ok) return r;
+  const rep = { added: 0, warned: 0, analysis: false, proposals: 0 };
+  if (o.posts) {
+    const r = importPlan(typeof o.posts === "string" ? o.posts : JSON.stringify(o.posts), S, "ki-aufgabe");
+    if (r.ok) (rep.added = r.added.length), (rep.warned = r.warned);
+  }
+  const an = o.analysis && typeof o.analysis === "object" ? o.analysis : null;
+  if (an && typeof an.text === "string" && an.text.trim()) {
+    const title = "KI-Wochenanalyse " + fmt(today());
+    if (!S.memory.some((m) => m.active && m.title === title)) {
+      const n = { id: uid(), cat: "Ziele", title, text: an.text.trim().slice(0, 8000), status: "estimate", date: today(), reason: "Geplante Claude-Aufgabe – Einschätzung, bitte prüfen", result: "", private: false, active: true, createdAt: Date.now(), dev: S.dev, src: "ki-aufgabe" };
+      touch(n);
+      S.memory.push(n);
+      rep.analysis = true;
+    }
+  }
+  if (an && an.actions) {
+    const pa = parseActions(typeof an.actions === "string" ? an.actions : JSON.stringify(an.actions));
+    if (pa.ok && pa.items.length) {
+      PROPOSALS = [{ id: o.id, at: Date.now(), items: pa.items }, ...PROPOSALS.filter((p) => p.id !== o.id)].slice(0, 5);
+      await kvPut("proposals", PROPOSALS);
+      rep.proposals = pa.items.length;
+    }
+  }
   c.done = [...(c.done || []), o.id].slice(-50);
   c.lastIn = Date.now();
   await kvPut("task-config", c);
   await save();
-  return { ok: true, added: r.added.length, warned: r.warned, detail: r.added.length + " Entwürfe übernommen" };
+  await A.del("in").catch(() => {});
+  return { ok: true, ...rep, detail: `${rep.added} Entwürfe${rep.analysis ? ", Wochenanalyse" : ""}${rep.proposals ? ", " + rep.proposals + " Aufgabenvorschläge" : ""} übernommen` };
+}
+/* Im Zyklus: Ergebnisse abholen (Stufe 0), Auftrag höchstens alle 20 Stunden erneuern (Stufe 1) */
+async function taskAuto() {
+  const c = await taskCfg();
+  if (!c || !syncUrl() || navigator.onLine === false) return null;
+  const out = [];
+  try {
+    const f = await act("task.fetch", "auto", () => taskFetch());
+    if (f.ok && (f.added || f.analysis || f.proposals)) out.push(f.detail);
+    if (Date.now() - (c.lastOut || 0) > 20 * 3600e3) {
+      const p = await act("task.publish", "auto", () => taskPublish());
+      if (p.ok) out.push("Auftrag erneuert");
+    }
+  } catch (e) {
+    logEvent("warn", "task.auto", e.message);
+  }
+  return out.join(" · ") || null;
 }
 
 /* ---------- Oberfläche („Mehr › Autonomie“) ---------- */
@@ -221,7 +300,7 @@ async function autonomySheet(extra = "") {
       ? '<div class="mut">Vorbereitet. Braucht den Synchronisierungs-Server (Entscheidung offen). Bis dahin: Monatsplan im Studio per „Auftrag kopieren“.</div>'
       : tc
         ? `<div class="mut">Eingerichtet seit ${new Date(tc.since).toLocaleDateString("de-DE")} · Auftrag zuletzt bereitgestellt: ${tc.lastOut ? new Date(tc.lastOut).toLocaleString("de-DE") : "nie"} · Ergebnisse zuletzt übernommen: ${tc.lastIn ? new Date(tc.lastIn).toLocaleString("de-DE") : "nie"}</div><div class="row" style="margin-top:6px"><button class="s" data-a="auTaskOut">Auftrag bereitstellen</button><button class="s" data-a="auTaskIn">Ergebnisse abholen</button></div>`
-        : '<div class="mut">Ein eigener Schlüssel öffnet nur das Auftrags-Postfach (nur öffentliche Fakten), nie deine Daten.</div><button class="s" data-a="auTaskSetup" style="margin-top:6px">Einrichten</button>'
+        : '<div class="mut">Wöchentlich: Instagram-Entwürfe, Wochenanalyse und Aufgabenvorschläge durch eine geplante Claude-Aufgabe (im Pro-Abo). Ein eigener Schlüssel öffnet nur das Auftrags-Postfach, nie deine Daten. Ergebnisse kommen nur als Entwürfe und Vorschläge.</div><button class="s" data-a="auTaskSetup" style="margin-top:6px">Einrichten</button>'
   }</div><button data-a="close">Schließen</button>`);
 }
 async function autonomyAction(a, id) {
@@ -248,7 +327,17 @@ async function autonomyAction(a, id) {
   }
   if (a === "auTaskSetup") {
     const r = await act("task.setup", "gruender", () => taskSetup());
-    return autonomySheet(`<div class="card rec warn"><b>Aufgaben-Schlüssel</b><p>Nur jetzt sichtbar. Trage ihn in der Umgebung deiner geplanten Claude-Aufgabe als geheimen Wert <code>VL_TASK_KEY</code> ein (Anleitung: docs/KI-AUTONOMIE.md). Er öffnet nur das Auftrags-Postfach.</p><input readonly value="${esc(r.tk)}" style="font-family:ui-monospace,monospace"></div>`);
+    await act("task.publish", "auto", () => taskPublish()).catch(() => null);
+    return autonomySheet(`<div class="card rec warn"><b>Aufgaben-Schlüssel</b><p>Nur jetzt sichtbar. Kopiere ihn und füge ihn in Claude in das sichere Formular „Netzwerkschlüssel“ ein, wenn Claude danach fragt. Nicht in den Chat einfügen. Er öffnet nur das Auftrags-Postfach.</p><textarea readonly id="auTk" rows="2" style="font-family:ui-monospace,monospace;font-size:15px;min-height:0;resize:none">${esc(r.token)}</textarea><button class="s" data-a="auTkCopy">Kopieren</button></div>`);
+  }
+  if (a === "auTkCopy") {
+    try {
+      await navigator.clipboard.writeText(val("auTk"));
+      return toast("Kopiert – jetzt in das sichere Formular einfügen");
+    } catch (e) {
+      $("#auTk").select();
+      return toast("Markiert. Bitte manuell kopieren.");
+    }
   }
   if (a === "auTaskOut") {
     const r = await act("task.publish", "auto", () => taskPublish());

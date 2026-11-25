@@ -82,6 +82,7 @@ function decisionsList(T = S) {
     for (const p of livePosts(T).filter((x) => x.status === "entwurf" && x.date && x.date >= today() && x.warnings && x.warnings.length).slice(0, 3))
       add("Beitrag mit Prüfhinweis: " + p.title, p.warnings[0], "stOpenNext", p.id);
   for (const m of T.memory.filter((x) => x.active && x.cat === "Entscheidung" && x.status === "unknown").slice(0, 3)) add("Offene Entscheidung: " + m.title, "Im Gedächtnis als „unbekannt“ markiert.", "tab", "memory");
+  if (typeof PROPOSALS !== "undefined") for (const pr of PROPOSALS) add("KI-Vorschläge prüfen: " + pr.items.length + " Aufgabe(n)", "Aus der Wochenanalyse vom " + new Date(pr.at).toLocaleDateString("de-DE") + " – du wählst aus, was angelegt wird.", "propOpen", pr.id);
   for (const x of liveTasks(T).filter((y) => y.decision && !y.done).slice(0, 3)) add(x.title, x.why || "Geschäftliche Entscheidung – nur durch dich.", "tab", "tasks");
   if (typeof pendingGrants === "function") for (const g of pendingGrants(T)) add("Berechtigung: " + g.title, g.why, "tab", "more");
   return L;

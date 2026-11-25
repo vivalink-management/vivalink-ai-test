@@ -433,12 +433,25 @@ document.addEventListener("click", async (e) => {
     const r = parseActions(val("ans"));
     if (!r.ok) return toast(r.error);
     window._acts = r.items;
+    window._prop = null;
     sheet(`<h1>Aufgaben übernehmen</h1><p class="mut">Vorschläge aus der KI-Antwort. Angehakte werden als Aufgaben angelegt. Geschäftliche Entscheidungen (Preise, Zahlungen, Werbung, Verträge) erscheinen unter „Entscheidungen für dich“.</p>${r.items
       .map(
         (it) =>
           `<label class="card" style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" data-act="${it.n}" ${it.dup ? "" : "checked"} style="width:auto;margin-top:4px"><span><b>${it.n}. ${esc(it.title)}</b><span class="mut" style="display:block">${esc(it.prio)} · ${esc(it.decision ? "Entscheidung nötig" : it.area)}${it.due ? " · Frist " + fmt(it.due) : ""}${it.after ? " · nach Nr. " + it.after : ""}</span>${it.why ? `<span class="mut" style="display:block">${esc(it.why)}</span>` : ""}${it.dup ? `<span class="mut" style="display:block;color:var(--warn)">Ähnliche Aufgabe vorhanden: „${esc(it.dup)}“</span>` : ""}</span></label>`,
       )
       .join("")}<div class="row"><button class="p" data-a="ansApply">Übernehmen</button><button data-a="close">Abbrechen</button></div>`);
+  } else if (a === "propOpen") {
+    const pr = PROPOSALS.find((x) => x.id === id);
+    if (!pr) return toast("Vorschlag nicht mehr vorhanden");
+    window._acts = pr.items;
+    window._prop = pr.id;
+    sheet(`<h1>KI-Vorschläge</h1><p class="mut">Aus der geplanten Wochenanalyse (Einschätzung). Angehakte werden als Aufgaben angelegt; geschäftliche Entscheidungen erscheinen gesondert.</p>${pr.items.map((it) => `<label class="card" style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" data-act="${it.n}" ${it.dup ? "" : "checked"} style="width:auto;margin-top:4px"><span><b>${it.n}. ${esc(it.title)}</b><span class="mut" style="display:block">${esc(it.prio)} · ${esc(it.decision ? "Entscheidung nötig" : it.area)}${it.due ? " · Frist " + fmt(it.due) : ""}${it.after ? " · nach Nr. " + it.after : ""}</span>${it.why ? `<span class="mut" style="display:block">${esc(it.why)}</span>` : ""}${it.dup ? `<span class="mut" style="display:block;color:var(--warn)">Ähnliche Aufgabe vorhanden: „${esc(it.dup)}“</span>` : ""}</span></label>`).join("")}<div class="row"><button class="p" data-a="ansApply">Übernehmen</button><button data-a="propDrop">Verwerfen</button><button data-a="close">Später</button></div>`);
+  } else if (a === "propDrop") {
+    PROPOSALS = PROPOSALS.filter((x) => x.id !== window._prop);
+    await kvPut("proposals", PROPOSALS);
+    close();
+    render();
+    toast("Vorschläge verworfen");
   } else if (a === "ansApply") {
     const chosen = [...document.querySelectorAll("[data-act]")].filter((e) => e.checked).map((e) => +e.dataset.act);
     if (!chosen.length) return toast("Nichts ausgewählt");
@@ -446,6 +459,11 @@ document.addEventListener("click", async (e) => {
       const made = applyActions(window._acts || [], chosen);
       return { ok: true, made, detail: made.length + " Aufgabe(n) aus KI-Antwort" };
     });
+    if (window._prop) {
+      PROPOSALS = PROPOSALS.filter((x) => x.id !== window._prop);
+      await kvPut("proposals", PROPOSALS);
+      window._prop = null;
+    }
     await save();
     close();
     tab = "tasks";
@@ -527,6 +545,7 @@ document.addEventListener("change", (e) => {
 (async () => {
   await loadLog();
   await loadActions();
+  await loadProposals();
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   } catch (e) {}
