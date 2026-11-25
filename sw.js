@@ -1,7 +1,7 @@
 /* Service Worker: lädt zuerst aus dem Netz (immer aktuelle Version), offline aus dem Speicher.
    Alle Netzabrufe umgehen den Browser-Zwischenspeicher (GitHub Pages erlaubt bis zu 10 Minuten),
    damit nach einem Update nie alte und neue Dateien gemischt oder veraltet offline gespeichert werden. */
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 const CH = "vivalink-test-"; // Test-Build: "vivalink-test-"
 const C = CH + VERSION;
 // Nur eigene, veraltete Offline-Speicher löschen. Die echte App und die Testversion berühren sich nie.
@@ -27,6 +27,7 @@ const F = [
   "js/rules.js",
   "js/studio.js",
   "js/advice.js",
+  "js/manage.js",
   "js/render.js",
   "js/prompts.js",
   "js/aitest.js",
@@ -34,12 +35,19 @@ const F = [
   "js/studio-view.js",
   "js/diag.js",
   "js/sync.js",
+  "js/autonomy.js",
   "js/kpi.js",
   "js/demo.js",
   "js/app.js",
 ];
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(C).then((c) => c.addAll(F.map((u) => new Request(u, { cache: "reload" })))));
+  // Unvollständige Installation (z. B. Verbindung weg): halb gefüllten Speicher entfernen, alte Version bleibt aktiv
+  e.waitUntil(
+    caches
+      .open(C)
+      .then((c) => c.addAll(F.map((u) => new Request(u, { cache: "reload" }))))
+      .catch((err) => caches.delete(C).then(() => Promise.reject(err))),
+  );
   self.skipWaiting();
 });
 self.addEventListener("activate", (e) => {

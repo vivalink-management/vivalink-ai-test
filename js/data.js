@@ -16,6 +16,7 @@ function migrate(T = S) {
     }
   }
   if (!T.meetup) (T.meetup = { date: "", place: "", goal: "", note: "", updatedAt: 0 }), (ch = true);
+  if (!Array.isArray(T.grants)) (T.grants = []), (ch = true); // widerrufbare Berechtigungen (additiv, ältere Versionen ignorieren sie)
   // Instagram-Studio (ab Datenversion 4): fehlende Felder ergänzen, Vorhandenes nie überschreiben
   const sd = studioDefaults();
   if (!T.studio || typeof T.studio !== "object") (T.studio = sd), (ch = true);
@@ -24,6 +25,29 @@ function migrate(T = S) {
   for (const k in sd.brand.colors) if (!T.studio.brand.colors[k]) (T.studio.brand.colors[k] = sd.brand.colors[k]), (ch = true);
   if (T.v !== SCHEMA) (T.v = SCHEMA), (ch = true);
   return ch;
+}
+
+/* ---------- Beschädigte Gerätedaten erkennen und reparieren ----------
+   bad: unbrauchbar (z. B. kein Objekt, Listen fehlen/kein Array) → letzter intakter Sicherungspunkt
+   junk: einzelne kaputte Einträge → werden entfernt (Original bleibt als Kopie erhalten) */
+function checkState(raw) {
+  if (raw == null) return { bad: false, junk: 0 };
+  if (typeof raw !== "object" || Array.isArray(raw)) return { bad: true, junk: 0 };
+  for (const k of ["memory", "tasks"]) if (raw[k] != null && !Array.isArray(raw[k])) return { bad: true, junk: 0 };
+  if (raw.studio != null && (typeof raw.studio !== "object" || (raw.studio.posts != null && !Array.isArray(raw.studio.posts)))) return { bad: true, junk: 0 };
+  if (raw.metrics != null && !Array.isArray(raw.metrics)) return { bad: true, junk: 0 };
+  const bad = (x) => !x || typeof x !== "object" || typeof x.id !== "string";
+  let junk = 0;
+  for (const L of [raw.memory, raw.tasks, raw.metrics, raw.grants, raw.studio && raw.studio.posts]) if (Array.isArray(L)) junk += L.filter(bad).length;
+  for (const m of Array.isArray(raw.metrics) ? raw.metrics : []) if (m && m.entries != null && !Array.isArray(m.entries)) junk++;
+  return { bad: false, junk };
+}
+function repairState(raw) {
+  const ok = (x) => x && typeof x === "object" && typeof x.id === "string";
+  for (const k of ["memory", "tasks", "metrics", "grants"]) if (Array.isArray(raw[k])) raw[k] = raw[k].filter(ok);
+  if (raw.studio && Array.isArray(raw.studio.posts)) raw.studio.posts = raw.studio.posts.filter(ok);
+  for (const m of raw.metrics || []) m.entries = Array.isArray(m.entries) ? m.entries.filter(ok) : [];
+  return raw;
 }
 
 /* ---------- Eingangsprüfung für Backups (schützt vor beschädigten oder manipulierten Daten) ---------- */
@@ -67,7 +91,25 @@ function cleanTask(r) {
   o.revs = revList(r.revs);
   if (r.fid != null) o.fid = str(r.fid, 80);
   if (r.src != null) o.src = str(r.src, 40);
+  o.after = isId(r.after) ? r.after : "";
+  o.deleted = !!r.deleted;
   return o;
+}
+/* Berechtigung: nur bekannte, freigebbare Handlungen; Widerruf bleibt erhalten (Protokoll) */
+function cleanGrant(r) {
+  if (!r || typeof r !== "object" || !isId(r.id) || typeof GRANTABLE === "undefined" || !GRANTABLE[r.action]) return null;
+  return {
+    id: r.id,
+    action: r.action,
+    until: optDate(r.until),
+    max: Math.max(1, Math.min(50, Math.round(optNum(r.max) || 1))),
+    per: r.per === "tag" ? "tag" : "woche",
+    note: str(r.note, 200),
+    createdAt: optNum(r.createdAt) || 0,
+    revokedAt: optNum(r.revokedAt) || null,
+    updatedAt: optNum(r.updatedAt) || 0,
+    revs: revList(r.revs),
+  };
 }
 function cleanEntry(e) {
   if (!e || typeof e !== "object" || !isId(e.id)) return null;
@@ -141,7 +183,11 @@ function cleanPost(r) {
     metrics: r.metrics && typeof r.metrics === "object" ? Object.fromEntries(["reach", "likes", "comments", "saves", "shares", "follows", "at"].map((k) => [k, num(r.metrics[k])])) : null,
     warnings: (Array.isArray(r.warnings) ? r.warnings : []).map((w) => str(w, 300)).slice(0, 10),
     hints: (Array.isArray(r.hints) ? r.hints : []).map((w) => str(w, 300)).slice(0, 12),
-    variant: Number.isInteger(r.variant) && r.variant >= 0 && r.variant <= 2 ? r.variant : 0,
+    variant: Number.isInteger(r.variant) && r.variant >= 0 && r.variant < DESIGNS.length ? r.variant : 0,
+    photo: r.photo && typeof r.photo === "object" && /^ph-[A-Za-z0-9_-]{4,40}$/.test(r.photo.id || "") ? { id: r.photo.id, consent: !!r.photo.consent, note: str(r.photo.note, 160) } : null,
+    kind: KINDS[r.kind] ? r.kind : undefined,
+    angle: str(r.angle, 120),
+    confirmed: !!r.confirmed,
     deleted: !!r.deleted,
     updatedAt: optNum(r.updatedAt) || 0,
     revs: revList(r.revs),
@@ -181,18 +227,25 @@ function parseBackup(text) {
     env = j;
     data = j.data;
   }
+  // Schutz vor Demodaten: Backups der Testversion werden in der echten App nicht übernommen
+  if (!IS_TEST && ((env && env.channel === "test") || (data && typeof data.dev === "string" && data.dev.startsWith("demo-"))))
+    return { ok: false, error: "Dieses Backup stammt aus der Testversion „VL Test“ (künstliche Daten) und wird in der echten App nicht übernommen." };
   if (!data || !Array.isArray(data.memory) || !Array.isArray(data.tasks))
     return { ok: false, error: "Kein gültiges Backup (Gedächtnis oder Aufgaben fehlen)" };
   return { ok: true, kind: "state", env, data, aitest: env && Array.isArray(env.aitest) ? env.aitest : null, schema: (env && env.schema) || data.v || 1 };
 }
 
 function cleanIncoming(data, aitest) {
-  const out = { memory: [], tasks: [], metrics: [], meetup: null, suggest: {}, aitest: [], posts: [], brand: null, settings: null, skipped: 0 };
+  const out = { memory: [], tasks: [], metrics: [], meetup: null, suggest: {}, aitest: [], posts: [], brand: null, settings: null, grants: [], skipped: 0 };
+  for (const r of Array.isArray(data.grants) ? data.grants : []) {
+    const c = cleanGrant(r);
+    c ? out.grants.push(c) : out.skipped++;
+  }
   const st = data.studio && typeof data.studio === "object" ? data.studio : null;
   if (st) {
     for (const r of Array.isArray(st.posts) ? st.posts : []) {
       const c = cleanPost(r);
-      c ? out.posts.push(c) : out.skipped++;
+      c && !(c.demo && !IS_TEST) ? out.posts.push(c) : out.skipped++;
     }
     out.brand = cleanBrand(st.brand);
     out.settings = cleanSettings(st.settings);
@@ -219,7 +272,7 @@ function cleanIncoming(data, aitest) {
     for (const k in data.suggest) {
       const s = data.suggest[k];
       if (/^[A-Za-z0-9_-]{1,80}$/.test(k) && s && typeof s === "object")
-        out.suggest[k] = { until: optDate(s.until), mode: s.mode === "nope" ? "nope" : "later", at: optNum(s.at) || 0 };
+        out.suggest[k] = { until: optDate(s.until), mode: s.mode === "nope" ? "nope" : "later", at: optNum(s.at) || 0, sev: [0, 1, 2, 3].includes(s.sev) ? s.sev : null, n: Math.min(4, Math.max(1, optNum(s.n) || 1)) };
     }
   for (const x of Array.isArray(aitest) ? aitest : []) {
     if (x && isId(x.id)) out.aitest.push(x);
@@ -322,6 +375,8 @@ function mergeInto(T, inc) {
     mergeList(T, T.memory, "memory", [r], rep, ["active", "supersededBy"]);
   }
   mergeList(T, T.tasks, "tasks", inc.tasks, rep);
+  if (!Array.isArray(T.grants)) T.grants = [];
+  mergeList(T, T.grants, "grants", inc.grants || [], rep);
   for (const r of inc.metrics) {
     const m = T.metrics.find((x) => x.id === r.id);
     if (!m) {
@@ -421,7 +476,7 @@ function resolveConflict(id, choice) {
       touch(x);
       return x;
     };
-    if (c.coll === "tasks" || c.coll === "memory" || c.coll === "posts") {
+    if (c.coll === "tasks" || c.coll === "memory" || c.coll === "posts" || c.coll === "grants") {
       const list = c.coll === "posts" ? S.studio.posts : S[c.coll],
         i = list.findIndex((x) => x.id === c.ref);
       lift(o);
@@ -473,6 +528,7 @@ async function makeBackup() {
     app: APP_VERSION,
     createdAt: new Date().toISOString(),
     device: S.dev,
+    channel: IS_TEST ? "test" : "prod",
     sha256: await sha256(payloadOf(data, aitest)),
     data,
     aitest,

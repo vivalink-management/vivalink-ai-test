@@ -84,13 +84,13 @@ function demoStudio() {
         ? [
             { template: "cover", title: t, text: "Demo-Beitrag – künstlicher Text" },
             { template: "tipp", title: "Sei neugierig", text: "Stell offene Fragen und hör aufmerksam zu. (Demo)" },
-            { template: "tipp", title: "Bleib entspannt", text: "Niemand erwartet Perfektion – kleine Gespräche reichen. (Demo)" },
+            { template: "info", title: "Kurz gesagt", text: "Offene Fragen stellen\nZuhören\nGemeinsamkeiten suchen" },
             { template: "abschluss", title: "Lust auf neue Kontakte?", text: "Alle Infos auf der Website." },
           ]
         : s.pillar === "meetup"
-          ? [{ template: "ankuendigung", title: t, text: "Demo-Ankündigung", details: S.meetup && S.meetup.date ? fmtLong(S.meetup.date) + "\n" + S.meetup.place : "" }]
+          ? [{ template: s.kind === "erinnerung" ? "erinnerung" : "ankuendigung", title: t, text: "Demo-Ankündigung", details: S.meetup && S.meetup.date ? fmtLong(S.meetup.date) + "\n" + S.meetup.place : "" }]
           : [{ template: s.pillar === "community" ? "frage" : "cover", title: t, text: "Schreib es in die Kommentare (Demo)" }];
-    return { ...s, title: t + " (Demo " + s.date + ")", hook: t, slides, caption: `${t}\n\nDas ist ein künstlicher Demo-Text für die Testversion.\n\nMehr auf ${b.website}`, hashtags: ["#Vivalink", "#Demo", "#NeueLeuteKennenlernen"] };
+    return { ...s, meetupDate: s.pillar === "meetup" && S.meetup ? S.meetup.date : "", title: t + " (Demo " + s.date + ")", hook: t, slides, caption: `${t}\n\nDas ist ein künstlicher Demo-Text für die Testversion.\n\nMehr auf ${b.website}`, hashtags: ["#Vivalink", "#Demo", "#NeueLeuteKennenlernen"] };
   });
   return importPlan(JSON.stringify({ format: PLAN_FORMAT, version: 1, posts }));
 }

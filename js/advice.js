@@ -70,7 +70,7 @@ ${f.causes.length ? `<div class="mut" style="margin-top:6px"><b>Mögliche Ursach
 <div class="mut" style="margin-top:6px"><b>Empfohlene Maßnahmen</b></div>${f.measures
     .map(
       (m, i) =>
-        `<div class="card" style="margin:6px 0;padding:8px 10px"><div>${esc(m.t)}</div><div class="mut">Priorität ${m.prio} · Nutzen ${LV[m.n]} · Dringlichkeit ${LV[m.d]} · Aufwand ${LV[m.a]}${m.studio ? " · bereitet einen Instagram-Entwurf vor" : ""}</div><button class="s" data-a="msr" data-id="${esc(f.id)}" data-v="${i}" style="margin-top:4px">Maßnahme freigeben</button></div>`,
+        `<div class="card" style="margin:6px 0;padding:8px 10px"><div><b>${i + 1}.</b> ${esc(m.t)}</div><div class="mut">Priorität ${m.prio} · Nutzen ${LV[m.n]} · Dringlichkeit ${LV[m.d]} · Aufwand ${LV[m.a]}${m.studio ? " · bereitet einen Instagram-Entwurf vor" : ""}</div><div class="mut">Risiko: ${esc(measureRisk(m))}</div><button class="s" data-a="msr" data-id="${esc(f.id)}" data-v="${i}" style="margin-top:4px">Maßnahme freigeben</button></div>`,
     )
     .join("")}
 </details>${f.tab ? `<button class="s" data-a="tab" data-id="${esc(f.tab)}" style="margin-top:6px">${f.tab === "ai" ? "Tiefenanalyse" : "Öffnen"}</button>` : ""}<div class="row" style="margin-top:6px"><button class="s p" data-a="mk" data-id="${esc(f.id)}">Als Aufgabe anlegen</button><button class="s" data-a="later" data-id="${esc(f.id)}">Später</button><button class="s" data-a="nope" data-id="${esc(f.id)}">Nicht relevant</button></div></div>`;
@@ -146,10 +146,20 @@ function measureLine(x, T = S) {
   const mm = T.metrics.find((y) => y.key === m.metric),
     name = mm ? mm.name : m.metric;
   const { now, delta } = measureState(x, T);
-  return `${name}: vorher ${m.baseline ? num(m.baseline.value) + " (" + fmt(m.baseline.date) + ")" : "kein Wert"} · jetzt ${now ? num(now.value) + " (" + fmt(now.date) + ")" : "kein Wert"}${delta != null ? ` · Veränderung ${delta > 0 ? "+" : ""}${num(delta)}` : ""}`;
+  // Vergleich mit dem gleich langen Zeitraum vor der Maßnahme: zeigt, ob sich nur ein bestehender Trend fortsetzt
+  let prior = "";
+  if (delta != null && m.baseline && mm) {
+    const span = Math.round((new Date(now.date + "T12:00") - new Date(m.baseline.date + "T12:00")) / 864e5);
+    const before = valid(mm).filter((e) => e.date <= addDays(m.baseline.date, -span)).pop();
+    if (span > 0 && before) {
+      const pd = m.baseline.value - before.value;
+      prior = ` · im gleichen Zeitraum davor ${pd > 0 ? "+" : ""}${num(pd)}`;
+    }
+  }
+  return `${name}: vorher ${m.baseline ? num(m.baseline.value) + " (" + fmt(m.baseline.date) + ")" : "kein Wert"} · jetzt ${now ? num(now.value) + " (" + fmt(now.date) + ")" : "kein Wert"}${delta != null ? ` · Veränderung ${delta > 0 ? "+" : ""}${num(delta)}` : ""}${prior}`;
 }
 function measureFindings(add, t) {
-  for (const x of S.tasks.filter((y) => y.measure && !y.measure.outcome && y.measure.checkAt <= t))
+  for (const x of S.tasks.filter((y) => y.measure && !y.deleted && !y.measure.outcome && y.measure.checkAt <= t))
     add("ms-" + x.id, "task", 1, "fakt", "Maßnahme auswerten: " + x.title, "Prüfe die Entwicklung und halte fest, ob die Maßnahme aus deiner Sicht gewirkt hat.", [measureLine(x), "Ein zeitlicher Zusammenhang ist kein Beweis für die Ursache."], "tasks");
 }
 function finishMeasure(id, outcome, T = S) {
@@ -184,7 +194,7 @@ function goalsHtml() {
 function statusHtml() {
   const t = today();
   const appr = S.studio ? livePosts().filter((p) => p.status === "entwurf" && p.date && p.date >= t && p.date <= addDays(t, 14)).length : 0;
-  const ms = S.tasks.filter((x) => x.measure && !x.measure.outcome).length;
+  const ms = S.tasks.filter((x) => x.measure && !x.deleted && !x.measure.outcome).length;
   const tech = openConflicts().length + LOG.filter((e) => e.level === "error" && Date.now() - e.at < 7 * 864e5).length;
   const cell = (n, l, tabId, bad) => `<div class="stat" data-a="tab" data-id="${tabId}"><b ${bad ? 'style="color:var(--bad)"' : ""}>${n}</b><span>${l}</span></div>`;
   return `<div class="stats">${cell(appr, "Freigaben", "studio")}${cell(ms, "Maßnahmen", "tasks")}${cell(tech ? tech : "OK", "Technik", "more", tech > 0)}${cell(S.metrics.filter((m) => cur(m)).length, "Kennzahlen", "home")}</div>`;

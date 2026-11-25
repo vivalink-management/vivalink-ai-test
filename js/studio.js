@@ -13,9 +13,26 @@ const PILLARS = [
 ];
 const PTYPES = { einzelbild: "Einzelbild", karussell: "Karussell", story: "Story", reel: "Reel" };
 const PSTATUS = { entwurf: "Entwurf", freigegeben: "Freigegeben", veroeffentlicht: "Veröffentlicht", abgelehnt: "Abgelehnt" };
-const TEMPLATES = ["cover", "tipp", "info", "frage", "ankuendigung", "rueckblick", "abschluss"];
+const TEMPLATES = ["cover", "tipp", "info", "frage", "ankuendigung", "erinnerung", "rueckblick", "abschluss", "foto"];
+const TEMPLATE_NAMES = { cover: "Titel", tipp: "Tipp (nummeriert)", info: "Info (Liste)", frage: "Frage", ankuendigung: "Meetup-Ankündigung", erinnerung: "Meetup-Erinnerung", rueckblick: "Rückblick", abschluss: "Abschluss mit Anmeldung", foto: "Eigenes Foto" };
+/* Beitragsarten: bestimmen Aufbau, Ton und Handlungsaufforderung */
+const KINDS = { ankuendigung: "Ankündigung", erinnerung: "Erinnerung", info: "Info", tipps: "Tipps", ideen: "Ideen", frage: "Frage", rueckblick: "Rückblick" };
+const PILLAR_KIND = { meetup: "ankuendigung", tipps: "tipps", orte: "ideen", sofunktionierts: "info", rueckblick: "rueckblick", community: "frage" };
+/* Blickwinkel je Bereich: sorgt für Abwechslung, ohne Fakten zu erfinden */
+const ANGLES = {
+  tipps: ["ein Gespräch mit Unbekannten beginnen", "Nervosität vor dem ersten Treffen", "Gemeinsamkeiten entdecken", "zuhören statt Smalltalk", "nach einem Treffen in Kontakt bleiben", "neu in der Stadt und Anschluss finden", "allein zu einem Treffen gehen"],
+  orte: ["entspannte Café-Runde", "gemeinsam draußen unterwegs", "Spieleabend in kleiner Runde", "Kultur gemeinsam erleben", "zusammen kochen oder essen gehen", "Sport und Bewegung in lockerer Runde"],
+  sofunktionierts: ["Was Vivalink anders macht", "Für wen Vivalink gedacht ist", "Vom Interesse zum persönlichen Treffen"],
+  community: ["Lieblingsort für gute Gespräche", "Was dir bei neuen Kontakten wichtig ist", "Aktivität, die du gern mit anderen machen würdest", "Entweder-oder-Frage", "Was ein Treffen angenehm macht"],
+  rueckblick: ["Eindrücke vom letzten Meetup (nur echte Angaben)"],
+  meetup: ["Ankündigung", "Erinnerung"],
+};
+/* Abgedroschene Werbefloskeln: Stilhinweis und Verbot im KI-Auftrag */
+const STOCK = ["in der heutigen zeit", "heutzutage", "worauf wartest du noch", "nicht verpassen", "verpasse nicht", "sei dabei!", "unvergesslich", "freundschaften fürs leben", "wir freuen uns riesig", "taucht ein", "tauche ein", "next level", "gönn dir", "das perfekte", "ganz einfach", "jetzt durchstarten", "abenteuer wartet", "mega", "tolle leute", "spannende menschen", "magische momente", "lass dich überraschen", "garantiert"];
+const LOUD_EMOJI = /[\u{1F525}\u{1F4AF}\u{1F680}\u{1F4A5}\u{1F631}\u{1F911}\u{1F4B0}\u{1F37E}\u{1F37B}\u{1F48B}\u{2764}\u{1F60D}\u{1F618}]/u;
 const WD = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 const PLAN_FORMAT = "vivalink-studio-plan";
+const DESIGNS = ["Logo-Verlauf", "Violett", "Hell", "Dunkel"];
 
 /* Markenfarben aus dem offiziellen Logo (vom Gründer bestätigt). Anmeldung über die Website (vom Gründer angegeben). */
 const BRAND_DEFAULT = {
@@ -28,6 +45,8 @@ const BRAND_DEFAULT = {
   colors: { pink: "#FA0372", violet: "#6203DD", orange: "#FE6603", magenta: "#AC01B7", rose: "#EE2278", text: "#000000" },
   colorsConfirmed: true,
   font: "Nunito",
+  // Vom Gründer beschriebene Besonderheiten (Grundlage aller Texte)
+  concept: "Persönliche Begegnungen statt nur online schreiben; kleine Gruppen; gemeinsame Interessen; echte Gespräche",
   audience: "Erwachsene, die neue Menschen kennenlernen möchten",
   tone: "freundlich, natürlich, modern und professionell; Du-Ansprache; deutsche Texte; Emojis nur sparsam (höchstens 1–2 pro Beitrag)",
   goals: ["Neue Registrierungen für die Vivalink-App", "Mehr Anmeldungen zu Meetups", "Höhere Bekanntheit von Vivalink", "Aufbau von Vertrauen"],
@@ -76,10 +95,12 @@ function studioFacts(T = S) {
   const add = (kind, text, ref) => F.push({ id: "F" + (F.length + 1), kind, text, ref });
   add("marke", `Name: ${b.name}. Website: ${b.website}.`, "brand");
   if (b.region) add("marke", `Regionaler Schwerpunkt: ${b.region}.`, "brand");
+  add("marke", `Besonderheiten: ${b.concept || BRAND_DEFAULT.concept}.`, "brand");
   if (b.signup) add("marke", `So meldet man sich an: ${b.signup}`, "brand");
   if (b.handle) add("marke", `Instagram-Konto: ${b.handle}`, "brand");
   const u = T.meetup;
   if (u && u.date && u.place && u.date >= today()) add("meetup", `Nächstes Meetup: ${fmtLong(u.date)} (${u.date}), Ort: ${u.place}.`, "meetup");
+  else if (u && u.date && u.place && u.date >= addDays(today(), -14)) add("meetup-vergangen", `Letztes Meetup: ${fmtLong(u.date)} (${u.date}), Ort: ${u.place}. Über den Verlauf liegen keine Angaben vor.`, "meetup");
   for (const m of T.memory.filter((m) => m.active && !m.private && m.status === "confirmed" && PUBLIC_CATS.includes(m.cat)))
     add(m.cat === "Meetup" ? "meetup-wissen" : m.cat === "Geschäftsmodell" ? "intern" : "app", `${m.title}${m.text ? ": " + m.text.slice(0, 400) : ""}${m.result ? " Ergebnis: " + m.result.slice(0, 200) : ""}`, m.id);
   return F;
@@ -92,7 +113,8 @@ function meetupCoverage(T = S) {
   if (!u || !u.date) return { announce: false, remind: false };
   const L = T.studio.posts.filter((p) => !p.deleted && p.status !== "abgelehnt" && p.pillar === "meetup" && (p.meetupDate === u.date || (p.date && p.date <= u.date && p.date >= addDays(u.date, -21))));
   const diff = (p) => (p.date ? Math.round((new Date(u.date + "T12:00") - new Date(p.date + "T12:00")) / 864e5) : 99);
-  return { announce: L.some((p) => p.auto === "ankuendigung" || diff(p) >= 4), remind: L.some((p) => p.auto === "erinnerung" || (diff(p) >= 0 && diff(p) <= 3)) };
+  const recap = T.studio.posts.some((p) => !p.deleted && p.status !== "abgelehnt" && (p.auto === "rueckblick" || p.pillar === "rueckblick") && (p.meetupDate === u.date || (p.date && p.date > u.date && p.date <= addDays(u.date, 14))));
+  return { announce: L.some((p) => p.auto === "ankuendigung" || diff(p) >= 4), remind: L.some((p) => p.auto === "erinnerung" || (diff(p) >= 0 && diff(p) <= 3)), recap };
 }
 
 /* ---------- Planung: Termine und Themenverteilung ---------- */
@@ -103,7 +125,7 @@ function planSlots(ym, T = S) {
   // Nur freie Termine: Tage mit vorhandenem Beitrag (außer gelöscht/abgelehnt) werden nicht erneut geplant
   const taken = new Set(st.posts.filter((p) => !p.deleted && p.status !== "abgelehnt" && p.date).map((p) => p.date));
   const days = monthDays(ym).filter((d) => set.days.includes(new Date(d + "T12:00").getDay()) && d >= today() && !taken.has(d));
-  const avail = PILLARS.filter((p) => !p.needs || (p.needs === "meetup" ? false : p.needs === "appfacts" ? hasFacts(F, ["app"]) : hasFacts(F, ["meetup-wissen"])));
+  const avail = PILLARS.filter((p) => !p.needs || (p.needs === "meetup" ? false : p.needs === "appfacts" ? hasFacts(F, ["app"]) : hasFacts(F, ["meetup-wissen", "meetup-vergangen"]) && !meetupCoverage(T).recap));
   const learned = st.learned && st.learned.order ? st.learned.order : [];
   const order = [...avail].sort((a, b) => (learned.indexOf(a.id) + 1 || 99) - (learned.indexOf(b.id) + 1 || 99));
   // Bestätigtes Meetup: Ankündigung am ersten Termin 7–13 Tage vorher, Erinnerung am letzten Termin 1–3 Tage vorher
@@ -120,17 +142,56 @@ function planSlots(ym, T = S) {
   const slots = [];
   let i = 0,
     reels = set.reelsPerMonth || 0;
+  // Abstand: gleicher Bereich nie direkt hintereinander (auch nicht neben bestehenden Beiträgen), seltene Bereiche zuerst
+  const live = st.posts.filter((p) => !p.deleted && p.status !== "abgelehnt" && p.date);
+  const neighbor = (d) => {
+    const before = live.filter((p) => p.date < d).sort((a, b) => b.date.localeCompare(a.date))[0];
+    const after = live.filter((p) => p.date > d).sort((a, b) => a.date.localeCompare(b.date))[0];
+    return [before && before.pillar, after && after.pillar];
+  };
+  const used = {};
+  for (const p of live) if (p.date.startsWith(ym)) used[p.pillar] = (used[p.pillar] || 0) + 1;
+  let prev = null;
+  const angleUse = {};
   for (const d of days) {
     if (meet.has(d)) {
-      slots.push({ date: d, time: set.time, pillar: "meetup", type: "einzelbild" });
+      const remind = u && Math.round((new Date(u.date + "T12:00") - new Date(d + "T12:00")) / 864e5) <= 3;
+      slots.push({ date: d, time: set.time, pillar: "meetup", type: "einzelbild", kind: remind ? "erinnerung" : "ankuendigung", angle: remind ? "Erinnerung" : "Ankündigung" });
+      prev = "meetup";
       continue;
     }
-    const p = order[i++ % order.length];
+    const [nb, na] = neighbor(d);
+    const cand = order.length ? [...order].sort((a, b) => (used[a.id] || 0) - (used[b.id] || 0) || order.indexOf(a) - order.indexOf(b)) : [];
+    const p = cand.find((q) => q.id !== prev && q.id !== nb && q.id !== na) || cand.find((q) => q.id !== prev) || cand[0];
+    if (!p) continue;
+    used[p.id] = (used[p.id] || 0) + 1;
+    prev = p.id;
+    i++;
     let type = p.type;
     if (reels > 0 && i % 4 === 0) (type = "reel"), reels--;
-    slots.push({ date: d, time: set.time, pillar: p.id, type });
+    slots.push({ date: d, time: set.time, pillar: p.id, type, kind: PILLAR_KIND[p.id], angle: pickAngle(p.id, T, angleUse) });
   }
   return slots;
+}
+/* Wenig genutzter Blickwinkel zuerst (berücksichtigt bisherige Beiträge der letzten 120 Tage) */
+function pickAngle(pillar, T = S, extra = {}) {
+  const L = ANGLES[pillar] || [];
+  if (!L.length) return "";
+  const n = (a) => T.studio.posts.filter((p) => !p.deleted && p.angle === a && (p.date || "") >= addDays(today(), -120)).length + (extra[a] || 0);
+  const a = [...L].sort((x, y) => n(x) - n(y) || L.indexOf(x) - L.indexOf(y))[0];
+  extra[a] = (extra[a] || 0) + 1;
+  return a;
+}
+/* Gestaltung automatisch abwechseln: nicht wie der vorherige Beitrag, selten genutzte zuerst */
+function pickVariant(date, T = S) {
+  const L = T.studio.posts.filter((p) => !p.deleted && p.status !== "abgelehnt").sort((a, b) => (a.date || "9").localeCompare(b.date || "9"));
+  const before = L.filter((p) => !date || (p.date || "9") <= date);
+  const last = before.slice(-6);
+  const prev = last.length ? last[last.length - 1].variant : null;
+  const nb = L.find((p) => date && p.date && p.date > date);
+  const cnt = (v) => last.filter((p) => p.variant === v).length;
+  const opts = DESIGNS.map((_, k) => k).filter((k) => k !== prev && (!nb || k !== nb.variant));
+  return opts.sort((a, b) => cnt(a) - cnt(b) || a - b)[0] ?? 0;
 }
 
 /* ---------- Arbeitsauftrag (Prompt) für den Monatsplan oder einzelne Beiträge ---------- */
@@ -148,42 +209,50 @@ function studioPrompt(ym, T = S, only = null) {
     .slice(-40);
   const learned = st.learned && st.learned.summary ? st.learned.summary : "";
   const pName = (id) => (PILLARS.find((p) => p.id === id) || {}).name || id;
-  return `Du bist Social-Media-Redakteur für „${b.name}“. Erstelle ${only ? "die folgenden Instagram-Beiträge" : "den Instagram-Redaktionsplan für " + ym} – vollständig und direkt veröffentlichbar.
+  return `Du schreibst die Instagram-Beiträge für „${b.name}“. Erstelle ${only ? "die folgenden Beiträge" : "den Redaktionsplan für " + ym} – fertig formuliert, so dass sie nach meiner Prüfung direkt veröffentlicht werden können.
 
-ÜBER ${b.name.toUpperCase()}
+WORUM ES BEI ${b.name.toUpperCase()} GEHT
+- ${b.concept || BRAND_DEFAULT.concept}.
 - Zielgruppe: ${b.audience}${b.region ? ", Schwerpunkt " + b.region + " und Umgebung" : ""}.
 - Ziele (Reihenfolge = Priorität): ${b.goals.join("; ")}.
-- Tonalität: ${b.tone}.
+- Ton: ${b.tone}. Schreib so, wie ein sympathischer Mensch aus dem Team spricht – konkret, warm, ohne Werbesprache.
 - Website: ${b.website}${b.signup ? "; Anmeldung: " + b.signup : ""}.${b.avoid ? "\n- Niemals erwähnen: " + b.avoid : ""}
 
-STRIKTE REGELN
-1. Verwende ausschließlich die Fakten F1–F${F.length} unten. Erfinde KEINE Veranstaltungen, Orte, Termine, Teilnehmerzahlen, Erfahrungsberichte, Zitate, Preise, App-Funktionen, Auszeichnungen oder Versprechen.
-2. Zahlen, Daten und Uhrzeiten nur, wenn sie in den Fakten oder im Termin des Beitrags stehen. Keine Preise.
-3. Bei „Orte und Aktivitäten“: nur allgemeine Arten von Orten und Aktivitäten (z. B. „ein gemütliches Café“), keine konkreten Namen, außer sie stehen in den Fakten.
-4. Bei „So funktioniert Vivalink“ nur beschreiben, was in den Fakten steht.
-5. Handlungsaufforderung: ${b.signup ? "auf den Anmeldeweg aus den Fakten verweisen" : "auf die Website " + b.website + " verweisen"}. Keine App-Store-Links erfinden.
-6. Keine Wiederholung der bisherigen Beiträge (Liste unten); Hooks und Themen deutlich unterschiedlich.
-7. Captions: 60–150 Wörter, Du-Ansprache, kurze Absätze, starker erster Satz, am Ende die Handlungsaufforderung. Höchstens 2 Emojis.
-8. 5–8 passende Hashtags (deutsch, ohne Leerzeichen)${b.hashtags ? ", immer dabei: " + b.hashtags : ""}.
-9. Interne Fakten (Typ „intern“) nur sinngemäß und nur, wenn sie für die Öffentlichkeit geeignet sind.
+WAHRHEIT VOR WIRKUNG (wichtigste Regel)
+1. Verwende ausschließlich die Fakten F1–F${F.length}. Erfinde KEINE Veranstaltungen, Orte, Termine, Teilnehmerzahlen, Erlebnisse, Zitate, Personen, Preise, App-Funktionen, Auszeichnungen oder Versprechen.
+2. Zahlen, Daten und Uhrzeiten nur aus den Fakten oder dem Termin des Beitrags. Keine Preise, nicht „kostenlos“, außer es steht in den Fakten.
+3. Anmeldung: nur ${b.signup ? "„" + b.signup + "“" : "über " + b.website}. Keine App-Store- oder Download-Hinweise und keine Aussage, dass es eine App zum Herunterladen gibt, außer es steht in den Fakten.
+4. Fehlt dir eine Angabe, erfinde sie nicht: schreibe an der Stelle [BITTE ERGÄNZEN: …]. Die App blockiert solche Beiträge, bis ich sie ausfülle.
+5. „Orte und Aktivitäten“: nur allgemeine Arten (z. B. „ein ruhiges Café“), keine Namen, außer sie stehen in den Fakten.
+6. Rückblicke nur mit echten Angaben aus den Fakten; Eindrücke, Stimmung und Zahlen als [BITTE ERGÄNZEN: …].
+
+SO KLINGT ES GUT
+- Jeder Beitrag hat einen anderen Einstieg. Wechsle zwischen: echter Frage an die Leser, kurzer Alltagsbeobachtung, klarer Aussage, kleinem Gedankenexperiment („Stell dir vor …“). Keine erfundenen Personen oder Erlebnisse.
+- Nutze den angegebenen Blickwinkel je Termin; keine Wiederholung der bisherigen Beiträge (Liste unten).
+- Vermeide Floskeln wie: ${STOCK.slice(0, 14).map((x) => "„" + x + "“").join(", ")}.
+- Captions 60–150 Wörter, kurze Absätze, Du-Ansprache. Höchstens 2 Emojis, nur passende und ruhige (z. B. 📅 📍 ☕ 🙂), keine 🔥💯🚀.
+- Handlungsaufforderung am Ende, jedes Mal anders formuliert, immer mit ${b.website}.
+- 5–8 passende deutsche Hashtags ohne Leerzeichen${b.hashtags ? ", immer dabei: " + b.hashtags : ""}; nicht in jedem Beitrag dieselben.
+- Interne Fakten (Typ „intern“) nur sinngemäß und nur, wenn sie für die Öffentlichkeit geeignet sind.
 
 FAKTEN
 ${F.map((f) => `${f.id} (${f.kind}): ${f.text}`).join("\n")}
 
 TERMINE (je ein Beitrag)
-${slots.map((s, i) => `${i + 1}. ${s.date} (${WD[new Date(s.date + "T12:00").getDay()]}) ${s.time} – Bereich: ${pName(s.pillar)} – Format: ${PTYPES[s.type]}`).join("\n")}
+${slots.map((s, i) => `${i + 1}. ${s.date} (${WD[new Date(s.date + "T12:00").getDay()]}) ${s.time} – Bereich: ${pName(s.pillar)} – Art: ${KINDS[s.kind || PILLAR_KIND[s.pillar]] || "frei"} – Format: ${PTYPES[s.type]}${s.angle ? " – Blickwinkel: " + s.angle : ""}`).join("\n")}
 
 BISHERIGE BEITRÄGE (nicht wiederholen)
 ${prev.length ? prev.join("\n") : "(noch keine)"}
 ${learned ? "\nBISHERIGE ERGEBNISSE (Annahme, kleine Datenbasis)\n" + learned + "\n" : ""}
-FORMAT DER FOLIEN
-- Einzelbild: genau 1 Folie. Vorlagen: "frage" (Community-Frage), "ankuendigung" (Meetup, Feld "details" mit Datum und Ort aus den Fakten), "rueckblick", "cover".
-- Karussell: 4–6 Folien: zuerst "cover", dann "tipp" oder "info", zuletzt "abschluss" (Handlungsaufforderung).
+FOLIEN
+- Einzelbild: genau 1 Folie. Vorlagen: "frage" (Community-Frage), "ankuendigung" (Meetup; Feld "details": Datum und Ort aus den Fakten, je Zeile), "erinnerung" (kurz vor dem Meetup, ebenfalls "details"), "rueckblick", "cover".
+- Karussell: 4–6 Folien: zuerst "cover" (neugierig machender Titel), dann "tipp" oder "info" (je Folie ein Gedanke; bei "info" Stichpunkte je Zeile), zuletzt "abschluss" (Handlungsaufforderung).
 - Reel: 1 Folie "cover" als Titelbild, zusätzlich "reel" mit Skript und Szenenliste.
-- Folientexte kurz: Titel höchstens 8 Wörter, Text höchstens 30 Wörter.
+- Folientexte kurz und auf dem Handy lesbar: Titel höchstens 8 Wörter, Text höchstens 25 Wörter.
+- "story": 1–2 kurze Sätze für eine Story (höchstens 15 Wörter).
 
 ANTWORTE NUR MIT DIESEM JSON (ohne weitere Erklärungen):
-{"format":"${PLAN_FORMAT}","version":1,"posts":[{"date":"JJJJ-MM-TT","time":"HH:MM","pillar":"${PILLARS.map((p) => p.id).join("|")}","type":"einzelbild|karussell|reel","title":"interner Kurztitel","hook":"erster Satz","slides":[{"template":"cover|tipp|info|frage|ankuendigung|rueckblick|abschluss","title":"…","text":"…","details":"…"}],"caption":"…","hashtags":["#…"],"facts":["F1"],"reel":{"script":"…","shots":["…"]},"story":"kurzer Story-Text (optional)"}]}`;
+{"format":"${PLAN_FORMAT}","version":1,"posts":[{"date":"JJJJ-MM-TT","time":"HH:MM","pillar":"${PILLARS.map((p) => p.id).join("|")}","kind":"${Object.keys(KINDS).join("|")}","angle":"Blickwinkel aus dem Termin","type":"einzelbild|karussell|reel","title":"interner Kurztitel","hook":"erster Satz","slides":[{"template":"cover|tipp|info|frage|ankuendigung|erinnerung|rueckblick|abschluss","title":"…","text":"…","details":"…"}],"caption":"…","hashtags":["#…"],"facts":["F1"],"reel":{"script":"…","shots":["…"]},"story":"…"}]}`;
 }
 
 /* ---------- KI-Antwort prüfen und übernehmen ---------- */
@@ -192,7 +261,7 @@ const cleanTag = (h) => {
     .trim()
     .replace(/^#*/, "")
     .replace(/[^0-9A-Za-zÄÖÜäöüß_]/g, "");
-  return t ? "#" + t : "";
+  return t && /[A-Za-zÄÖÜäöüß]/.test(t) ? "#" + t : ""; // nur Ziffern verlinkt Instagram nicht
 };
 const words = (s) =>
   new Set(
@@ -239,6 +308,11 @@ function factCheck(p, T = S) {
     W.push("Möglicher Erfahrungsbericht oder Zitat – nur mit echter, belegter Quelle verwenden");
   if (/garantiert|100\s*%|immer neue freunde|beste[nr]? (app|community)|nr\.\s*1/i.test(all)) W.push("Mögliches Versprechen oder Superlativ");
   if (/(apps\.apple\.com|play\.google\.com|bit\.ly|https?:\/\/)/i.test(all) && !/(apps\.apple\.com|play\.google\.com)/i.test(allowed)) W.push("Enthält einen Link, der nicht aus den Fakten stammt");
+  if (/\[\s*bitte\s+ergänzen|\[\s*ergänzen|\bTODO\b|\bXX+\b|\[\.\.\.\]|\[…\]/i.test(all)) W.push("Platzhalter noch nicht ausgefüllt ([BITTE ERGÄNZEN …]) – fehlende Angaben bitte selbst eintragen");
+  if (/app\s*-?\s*store|play\s*-?\s*store|google\s+play|herunterladen|\bdownload|runterladen|jetzt\s+(in\s+der|die)\s+app\b/i.test(all) && !/app\s*-?\s*store|play\s*-?\s*store|herunterladen|download/i.test(allowed))
+    W.push("Hinweis auf App-Download oder App-Store – nur verwenden, wenn in deinen Daten bestätigt (Anmeldung läuft über " + (T.studio.brand.website || "vivalink.me") + ")");
+  if (/\b(\d+|hunderte|tausende|dutzende)\s+(mitglieder|nutzer|teilnehmer|leute|menschen)\b/i.test(all) && !/mitglieder|nutzer|teilnehmer/i.test(allowed)) W.push("Angabe zur Zahl von Mitgliedern oder Teilnehmenden – nur mit belegten Daten");
+  if (p.pillar === "rueckblick" && !p.confirmed && !F.some((f) => f.kind === "meetup-wissen")) W.push("Rückblick: Angaben bitte selbst bestätigen („Angaben geprüft“ unter „Termin“)");
   if (p.pillar === "meetup" && !F.some((f) => f.kind === "meetup")) W.push("Meetup-Beitrag ohne bestätigtes Meetup in den Daten");
   const u = T.meetup;
   if (p.pillar === "meetup" && u && u.place && u.date >= today() && !all.toLowerCase().includes(u.place.toLowerCase()))
@@ -285,9 +359,12 @@ function makePost(x, source, T = S) {
     metrics: null,
     createdAt: Date.now(),
     meetupDate: x.meetupDate || "",
+    kind: KINDS[x.kind] ? x.kind : PILLAR_KIND[PILLARS.some((q) => q.id === x.pillar) ? x.pillar : "community"],
+    angle: str(x.angle, 120),
   };
+  if (IS_TEST) p.demo = true; // Testversion: jeder Beitrag ist künstlich und wird in der echten App abgelehnt
   if (p.pillar === "meetup" && !p.meetupDate && T.meetup && T.meetup.date && p.date && p.date <= T.meetup.date) p.meetupDate = T.meetup.date;
-  p.variant = Number.isInteger(x.variant) && x.variant >= 0 && x.variant <= 2 ? x.variant : T.studio.posts.filter((q) => !q.deleted).length % 3;
+  p.variant = Number.isInteger(x.variant) && x.variant >= 0 && x.variant < DESIGNS.length ? x.variant : pickVariant(p.date, T);
   checkPost(p, T);
   touch(p);
   return p;
@@ -308,20 +385,55 @@ function parsePlanAnswer(text) {
   return { ok: true, items: list.filter((x) => x && typeof x === "object").slice(0, 60) };
 }
 /* Übernimmt geprüfte Beiträge als Entwürfe (ersetzt nichts, löscht nichts). */
-function importPlan(text, T = S) {
+function importPlan(text, T = S, source = "ki") {
   const r = parsePlanAnswer(text);
   if (!r.ok) return r;
   const added = [];
+  let dupes = 0;
+  const key = (p) => [p.date, p.pillar, (p.hook || "").trim().toLowerCase(), (p.caption || "").trim().toLowerCase()].join("|");
+  const have = new Set(T.studio.posts.filter((p) => !p.deleted).map(key));
   for (const x of r.items) {
-    const p = makePost(x, "ki", T);
+    const p = makePost(x, source, T);
     if (!p.caption && !p.slides.some((s) => s.title || s.text)) continue;
+    // Dieselbe Antwort zweimal eingefügt → keine doppelten Beiträge
+    if (have.has(key(p))) {
+      dupes++;
+      continue;
+    }
+    have.add(key(p));
     T.studio.posts.push(p);
     added.push(p);
   }
-  return { ok: true, added, warned: added.filter((p) => p.warnings.length).length };
+  return { ok: true, added, dupes, warned: added.filter((p) => p.warnings.length).length };
 }
 
 /* ---------- Selbstständig erkannte Anlässe: Entwürfe ohne KI, nur aus Fakten ---------- */
+/* Mehrere Formulierungen, damit automatische Beiträge nicht immer gleich klingen. Keine erfundenen Angaben:
+   nur Datum, Ort, Anmeldeweg und die vom Gründer beschriebenen Besonderheiten. */
+const AUTO_TEXT = {
+  ankuendigung: [
+    (w, o, c) => `Neue Leute kennenlernen, ohne wochenlang zu schreiben: Beim nächsten Meetup triffst du Menschen direkt – in kleiner Runde, mit Zeit für echte Gespräche.\n\n📅 ${w}\n📍 ${o}\n\n${c}`,
+    (w, o, c) => `Am ${w} treffen wir uns wieder.\n\nOrt: ${o}\n\nPersönlich statt nur online: Lerne Menschen kennen, die ähnliche Interessen haben, und nimm dir Zeit für ein richtiges Gespräch.\n\n${c}`,
+    (w, o, c) => `Manchmal braucht es nur einen Anlass, um mit jemandem ins Gespräch zu kommen.\n\nUnser nächstes Meetup: ${w}, ${o}. Wir treffen uns in kleiner Runde, damit jeder zu Wort kommt.\n\n${c}`,
+  ],
+  erinnerung: [
+    (w, o, c, d) => `${d === 0 ? "Heute ist es so weit" : d === 1 ? "Morgen ist es so weit" : "Nur noch wenige Tage"}: unser Meetup am ${w}.\n\nOrt: ${o}\n\n${c}`,
+    (w, o, c) => `Kurze Erinnerung: Am ${w} treffen wir uns – ${o}.\n\nKleine Runde, echte Gespräche, neue Gesichter.\n\n${c}`,
+    (w, o, c) => `Falls du noch überlegst: Das nächste Meetup ist am ${w} (${o}).\n\nEin entspannter Rahmen, um Menschen persönlich kennenzulernen.\n\n${c}`,
+  ],
+  rueckblick: [
+    (w, o, c) => `Rückblick auf unser Meetup am ${w} (${o}).\n\n[BITTE ERGÄNZEN: Was ist euch in Erinnerung geblieben? Nur echte Eindrücke, keine Zahlen ohne Beleg.]\n\nDas nächste Treffen kündigen wir hier an. ${c}`,
+    (w, o, c) => `So war unser Meetup am ${w} – Ort: ${o}.\n\n[BITTE ERGÄNZEN: zwei, drei ehrliche Sätze zum Abend, z. B. worüber gesprochen wurde.]\n\n${c}`,
+  ],
+};
+const AUTO_TAGS = ["#NeueLeuteKennenlernen", "#EchteGespräche", "#Begegnungen", "#GemeinsamStattEinsam", "#Freizeit", "#Freundefinden"];
+function autoCta(b, k) {
+  // Immer der eingetragene Anmeldeweg (keine anderen Behauptungen über den Ablauf)
+  const way = b.signup || "Anmeldung über " + b.website;
+  const L = [way + ".", `Lust bekommen? ${way}.`, `Mehr Infos auf ${b.website} · ${way}.`];
+  return L[k % L.length];
+}
+const hashN = (s) => [...String(s)].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
 function autoDrafts(T = S) {
   const st = T.studio,
     u = T.meetup,
@@ -329,44 +441,83 @@ function autoDrafts(T = S) {
     out = [];
   if (!u || !u.date || !u.place) return out;
   const days = Math.round((new Date(u.date + "T12:00") - new Date(today() + "T12:00")) / 864e5);
-  if (days < 1 || days > 21) return out;
-  const cta = b.signup ? b.signup : `Mehr Infos und Anmeldung: ${b.website}`;
+  if (days > 21 || days < -6) return out;
   const cov = meetupCoverage(T);
-  const has = (k) => (k === "ankuendigung" ? cov.announce : cov.remind);
   const when = fmtLong(u.date);
-  if (!has("ankuendigung")) {
+  // Formulierung je Anlass wechseln: andere Variante als beim letzten automatischen Beitrag derselben Art
+  const pick = (k) => {
+    const L = AUTO_TEXT[k],
+      last = st.posts.filter((p) => p.auto === k && Number.isInteger(p.autoText)).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))[0];
+    let n = hashN(u.date + k) % L.length;
+    if (last && last.autoText === n) n = (n + 1) % L.length;
+    return n;
+  };
+  const tags = (k) => {
+    const r = b.region ? cleanTag(b.region.split(/[ ,/]/)[0]) : "";
+    const h = hashN(u.date + k);
+    return ["#Vivalink", "#Meetup", r, AUTO_TAGS[h % AUTO_TAGS.length], AUTO_TAGS[(h + 2) % AUTO_TAGS.length]].filter(Boolean);
+  };
+  if (days >= 1 && !cov.announce) {
+    const n = pick("ankuendigung");
     const date = days > 4 ? addDays(today(), 1) : today();
     out.push({
       auto: "ankuendigung",
+      autoText: n,
       x: {
         date,
         time: st.settings.time,
         pillar: "meetup",
+        kind: "ankuendigung",
         type: "einzelbild",
         title: "Meetup-Ankündigung " + fmt(u.date),
-        hook: "Lust, neue Leute kennenzulernen?",
-        slides: [{ template: "ankuendigung", title: "Nächstes Meetup", text: "Neue Menschen kennenlernen – entspannt und in kleiner Runde.", details: `${when}\n${u.place}` }],
-        caption: `Lust, neue Leute kennenzulernen? 👋\n\nUnser nächstes Meetup findet am ${when} statt – Ort: ${u.place}.\n\nKomm vorbei und lerne in entspannter Atmosphäre neue Menschen kennen.\n\n${cta}`,
-        hashtags: ["#Vivalink", "#Meetup", "#NeueLeuteKennenlernen", "#Freundschaft"],
+        hook: ["Neue Leute kennenlernen – persönlich", "Am " + when + " treffen wir uns wieder", "Manchmal braucht es nur einen Anlass"][n],
+        slides: [{ template: "ankuendigung", title: ["Nächstes Meetup", "Lass uns treffen", "Persönlich kennenlernen"][n % 3], text: "Kleine Runde, echte Gespräche.", details: `${when}\n${u.place}` }],
+        caption: AUTO_TEXT.ankuendigung[n](when, u.place, autoCta(b, n)),
+        hashtags: tags("a"),
         facts: ["meetup"],
         story: `Nächstes Meetup: ${when} – ${u.place}`,
         meetupDate: u.date,
       },
     });
   }
-  if (days <= 3 && !has("erinnerung")) {
+  if (days >= 0 && days <= 3 && !cov.remind) {
+    const n = pick("erinnerung");
     out.push({
       auto: "erinnerung",
+      autoText: n,
       x: {
         date: today(),
         time: st.settings.time,
         pillar: "meetup",
+        kind: "erinnerung",
         type: "story",
         title: "Meetup-Erinnerung " + fmt(u.date),
-        hook: "Bald ist es so weit!",
-        slides: [{ template: "ankuendigung", title: "Bald ist es so weit", text: "Wir freuen uns auf dich!", details: `${when}\n${u.place}` }],
-        caption: `Bald ist es so weit: Unser Meetup am ${when} – ${u.place}.\n\n${cta}`,
-        hashtags: ["#Vivalink", "#Meetup"],
+        hook: "Bald ist es so weit",
+        slides: [{ template: "erinnerung", title: "Bald ist es so weit", text: "Wir freuen uns auf dich.", details: `${when}\n${u.place}` }],
+        caption: AUTO_TEXT.erinnerung[n](when, u.place, autoCta(b, n + 1), days),
+        hashtags: tags("r"),
+        facts: ["meetup"],
+        meetupDate: u.date,
+      },
+    });
+  }
+  // Nach dem Meetup: Rückblick als Entwurf mit Platzhaltern – blockiert die Freigabe, bis echte Angaben eingetragen sind
+  if (days < 0 && !cov.recap) {
+    const n = pick("rueckblick");
+    out.push({
+      auto: "rueckblick",
+      autoText: n,
+      x: {
+        date: addDays(today(), 1),
+        time: st.settings.time,
+        pillar: "rueckblick",
+        kind: "rueckblick",
+        type: "einzelbild",
+        title: "Rückblick Meetup " + fmt(u.date),
+        hook: "Rückblick auf unser Meetup",
+        slides: [{ template: "rueckblick", title: "Rückblick: Meetup am " + fmt(u.date), text: "[BITTE ERGÄNZEN: ein Satz zum Abend]" }],
+        caption: AUTO_TEXT.rueckblick[n](when, u.place, autoCta(b, n + 2)),
+        hashtags: tags("b"),
         facts: ["meetup"],
         meetupDate: u.date,
       },
@@ -379,6 +530,7 @@ function runAutomations(T = S) {
   for (const d of autoDrafts(T)) {
     const p = makePost(d.x, "regel", T);
     p.auto = d.auto;
+    p.autoText = d.autoText;
     T.studio.posts.push(p);
     made.push(p);
   }
@@ -454,6 +606,25 @@ function styleCheck(p, T = S) {
   const site = (b.website || "vivalink.me").toLowerCase();
   if (p.type !== "story" && !String(p.caption || "").toLowerCase().includes(site) && !(b.signup && String(p.caption || "").includes(b.signup)))
     H.push("Keine Handlungsaufforderung mit „" + (b.website || "vivalink.me") + "“ – Ziel Nr. 1 sind Registrierungen");
+  const low = [p.caption, p.hook, ...(p.slides || []).flatMap((s) => [s.title, s.text])].join(" \n ").toLowerCase();
+  const word = (x) => new RegExp("(^|[^a-zäöüß])" + x.replace(/[.*+?^${}()|[\]\\!]/g, "\\$&") + "($|[^a-zäöüß])");
+  const fl = STOCK.filter((x) => word(x).test(low));
+  if (fl.length) H.push("Floskel: " + fl.slice(0, 3).map((x) => "„" + x + "“").join(", ") + " – konkreter formulieren");
+  if (LOUD_EMOJI.test(p.caption || "")) H.push("Laute Emojis (z. B. 🔥 🚀 💯) passen nicht zum ruhigen Ton – lieber 🙂 ☕ 📍");
+  const paras = String(p.caption || "").split(/\n+/).filter((x) => x.trim());
+  if (paras.length >= 3 && paras.every((x) => /^\p{Extended_Pictographic}/u.test(x.trim()))) H.push("Jeder Absatz beginnt mit einem Emoji – wirkt unruhig");
+  const sentences = (x) =>
+    String(x || "")
+      .toLowerCase()
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map((z) => z.replace(/[^a-zäöüß0-9 ]/g, "").trim())
+      .filter((z) => z.split(" ").length >= 6);
+  const mine = sentences(p.caption);
+  if (new Set(mine).size < mine.length) H.push("Ein Satz kommt in der Caption doppelt vor");
+  const other = new Set(T.studio.posts.filter((q) => q.id !== p.id && !q.deleted && (q.date || "") >= addDays(today(), -60)).flatMap((q) => sentences(q.caption)));
+  const rep2 = mine.filter((z) => other.has(z));
+  if (rep2.length) H.push(rep2.length + " Satz/Sätze wörtlich wie in einem Beitrag der letzten 60 Tage");
+  if (p.photo && p.photo.id && !p.photo.consent) H.push("Foto ohne bestätigte Bildrechte/Einwilligung – wird nicht verwendet");
   const start = (s) => String(s || "").toLowerCase().split(/\s+/).slice(0, 3).join(" ");
   const st = start(p.hook || p.caption);
   if (st.split(" ").length === 3 && T.studio.posts.some((q) => q.id !== p.id && !q.deleted && q.date >= addDays(today(), -60) && start(q.hook || q.caption) === st))

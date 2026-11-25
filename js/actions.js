@@ -8,6 +8,12 @@ const POLICY = {
   "studio.autoDraft": { lvl: 0, n: "Instagram-Entwurf aus bestätigten Fakten vorbereiten" },
   "kpi.fetch": { lvl: 0, n: "Kennzahlen aus der Verwaltung abrufen (nur lesend)" },
   "sync.run": { lvl: 1, n: "Geräte synchronisieren (mit Rückgängig-Punkt)" },
+  "sync.pair": { lvl: 2, n: "Gerät koppeln (Prüfzahl bestätigt) oder Synchronisierung einrichten" },
+  "sync.rotate": { lvl: 2, n: "Synchronisierungs-Schlüssel erneuern und alten Tresor sperren" },
+  "grant.manage": { lvl: 2, n: "Berechtigungen erteilen oder widerrufen" },
+  "task.setup": { lvl: 2, n: "Aufgaben-Kanal für geplante KI-Aufgaben einrichten" },
+  "task.publish": { lvl: 1, n: "Auftrag mit öffentlichen Fakten für die geplante KI-Aufgabe bereitstellen" },
+  "task.fetch": { lvl: 0, n: "Ergebnisse der geplanten KI-Aufgabe als Entwürfe übernehmen" },
   "measure.start": { lvl: 2, n: "Maßnahme starten" },
   "post.approve": { lvl: 2, n: "Instagram-Beitrag freigeben" },
   "post.publish": { lvl: 2, n: "Freigegebenen Instagram-Beitrag veröffentlichen" },
@@ -30,29 +36,38 @@ function mayRun(name, by = "auto") {
   const p = POLICY[name];
   if (!p) return { ok: false, why: "Unbekannte Handlung – aus Sicherheitsgründen abgelehnt" };
   if (p.lvl >= 3) return { ok: false, why: "Stufe 3 (" + LVL[3] + "): " + p.n };
-  if (p.lvl === 2 && by !== "gruender") return { ok: false, why: "Stufe 2: braucht deine Freigabe" };
+  if (p.lvl === 2 && by !== "gruender") {
+    // Automatisch nur mit aktiver, befristeter und begrenzter Berechtigung des Gründers (js/autonomy.js)
+    const g = by === "auto" && typeof grantAllows === "function" ? grantAllows(name) : { ok: false, why: "Stufe 2: braucht deine Freigabe" };
+    return g.ok ? { ok: true, grant: g.g.id } : { ok: false, why: g.why };
+  }
   return { ok: true };
 }
-function logAction(name, by, ok, detail) {
+function logAction(name, by, ok, detail, grant) {
   const p = POLICY[name] || { lvl: 3 };
-  ACTIONS.push({ at: Date.now(), name, lvl: p.lvl, by, ok, detail: redact(detail || "").slice(0, 160) });
+  ACTIONS.push({ at: Date.now(), name, lvl: p.lvl, by, ok, detail: redact(detail || "").slice(0, 160), ...(grant ? { grant } : {}) });
   if (ACTIONS.length > ACT_MAX) ACTIONS = ACTIONS.slice(-ACT_MAX);
   kvPut("actions", ACTIONS);
 }
 /* Führt eine Handlung nur aus, wenn die Freigabelogik sie erlaubt – und protokolliert beides. */
+const GRANT_PENDING = {};
 async function act(name, by, fn) {
   const m = mayRun(name, by);
   if (!m.ok) {
     logAction(name, by, false, "abgelehnt: " + m.why);
     return { ok: false, refused: true, error: m.why };
   }
+  // Nutzung einer Berechtigung sofort vormerken (verhindert Überschreiten des Limits bei gleichzeitigen Abläufen)
+  if (m.grant) GRANT_PENDING[m.grant] = (GRANT_PENDING[m.grant] || 0) + 1;
   try {
     const r = await fn();
-    logAction(name, by, !(r && r.ok === false), r && r.detail ? r.detail : "");
+    logAction(name, by, !(r && r.ok === false), (m.grant ? "mit Berechtigung: " : "") + (r && r.detail ? r.detail : ""), m.grant);
     return r;
   } catch (e) {
-    logAction(name, by, false, e.message);
+    logAction(name, by, false, e.message, m.grant);
     throw e;
+  } finally {
+    if (m.grant) GRANT_PENDING[m.grant]--;
   }
 }
 
@@ -62,12 +77,13 @@ function canPublish(p) {
   if (!p || p.deleted) return { ok: false, why: "Beitrag gelöscht" };
   if (p.status === "veroeffentlicht" || (p.publish && p.publish.state === "erledigt")) return { ok: false, why: "Bereits veröffentlicht – doppelte Veröffentlichung verhindert" };
   if (p.publish && p.publish.state === "laeuft" && Date.now() - p.publish.at < 10 * 60e3) return { ok: false, why: "Veröffentlichung läuft bereits" };
+  if (p.demo) return { ok: false, why: "Demo-Beitrag aus der Testversion – wird nie veröffentlicht" };
   if (p.status !== "freigegeben") return { ok: false, why: "Nicht freigegeben – Veröffentlichung nur nach deiner Freigabe" };
   if (p.approvedHash && p.approvedHash !== postHash(p)) return { ok: false, why: "Seit der Freigabe verändert – bitte erneut freigeben" };
   return { ok: true };
 }
 /* Fingerabdruck des veröffentlichten Inhalts (Text, Folien, Termin) */
-const postHash = (p) => JSON.stringify([p.caption, p.hashtags, p.slides, p.type, p.date, p.variant]);
+const postHash = (p) => JSON.stringify([p.caption, p.hashtags, p.slides, p.type, p.date, p.variant].concat(p.photo && p.photo.consent ? [p.photo.id] : []));
 function approvePost(p) {
   p.status = "freigegeben";
   p.approvedAt = Date.now();

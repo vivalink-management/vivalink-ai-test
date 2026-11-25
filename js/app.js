@@ -9,15 +9,42 @@ document.addEventListener("click", async (e) => {
     scrollTo(0, 0);
   } else if (a === "close") close();
   else if (a === "newTask") taskForm();
-  else if (a === "saveTask") {
+  else if (a === "editTask") taskForm(S.tasks.find((y) => y.id === id));
+  else if (a === "delTask") {
+    const x = S.tasks.find((y) => y.id === taskEdit);
+    if (!x) return;
+    if (window._tdel !== x.id) {
+      window._tdel = x.id;
+      return toast("Nochmal tippen, um die Aufgabe zu löschen");
+    }
+    window._tdel = null;
+    x.deleted = true; // Löschvermerk (für Synchronisierung), abhängige Aufgaben werden frei
+    x.done = true;
+    for (const y of S.tasks.filter((z) => z.after === x.id)) (y.after = ""), touch(y);
+    touch(x);
+    close();
+    await save();
+    render();
+    toast("Aufgabe gelöscht");
+  } else if (a === "saveTask") {
     const t = val("t-t").trim();
     if (!t) return toast("Bitte eine Aufgabe eingeben");
+    const ex = taskEdit && S.tasks.find((y) => y.id === taskEdit);
+    if (ex) {
+      Object.assign(ex, { title: t, prio: val("t-p"), area: val("t-a"), due: val("t-d"), after: makesCycle(ex.id, val("t-after")) ? "" : val("t-after") });
+      touch(ex);
+      close();
+      await save();
+      render();
+      return toast("Aufgabe gespeichert");
+    }
     const x = {
       id: uid(),
       title: t,
       prio: val("t-p"),
       area: val("t-a"),
       due: val("t-d"),
+      after: val("t-after"),
       done: false,
       dev: S.dev,
     };
@@ -108,15 +135,15 @@ document.addEventListener("click", async (e) => {
     toast("Aufgabe angelegt (Frist " + fmt(due) + ")");
   } else if (a === "later" || a === "nope") {
     S.suggest = S.suggest || {};
-    const days = a === "later" ? 7 : 60;
-    S.suggest[id] = {
-      until: new Date(Date.now() + days * 864e5).toLocaleDateString("sv-SE"),
-      mode: a,
-      at: Date.now(),
-    };
+    const f = findings().find((x) => x.id === id),
+      prev = S.suggest[id];
+    // „Später“ wiederholt: Abstand verdoppelt sich (7, 14, 28 Tage); „Nicht relevant“: erst wieder bei Verschärfung
+    const n = prev && prev.mode === a ? Math.min((prev.n || 1) + 1, 4) : 1;
+    const days = a === "later" ? 7 * 2 ** (n - 1) : 180;
+    S.suggest[id] = { until: addDays(today(), days), mode: a, at: Date.now(), sev: f ? f.sev : 3, n };
     await save();
     render();
-    toast(a === "later" ? "Für 7 Tage ausgeblendet" : "Als nicht relevant markiert (60 Tage ausgeblendet)");
+    toast(a === "later" ? `Für ${days} Tage ausgeblendet` : "Als nicht relevant markiert – erscheint nur wieder, wenn es dringender wird");
   } else if (a === "met") metSheet(id);
   else if (a === "meet") meetForm();
   else if (a === "saveMeet") {
@@ -384,6 +411,7 @@ document.addEventListener("click", async (e) => {
   else if (a.startsWith("st")) studioAction(a, id, b);
   else if (a === "snaps") snapSheet();
   else if (a === "sync" || a.startsWith("sy")) syncAction(a);
+  else if (a === "auto" || a.startsWith("au")) autonomyAction(a, id);
   else if (a === "msr") {
     const x = await act("measure.start", "gruender", () => startMeasure(id, Number(b.dataset.v)));
     if (!x || x.ok === false) return toast((x && x.error) || "Befund nicht mehr aktuell");
@@ -461,7 +489,31 @@ document.addEventListener("change", (e) => {
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   } catch (e) {}
-  const raw = await load();
+  let raw = await load();
+  // Beschädigte Gerätedaten: Original aufbewahren, reparieren oder letzten intakten Sicherungspunkt verwenden
+  const health = checkState(raw);
+  if (health.bad || health.junk) {
+    await kvPut("corrupt-last", { at: Date.now(), raw });
+    if (health.bad) {
+      let restored = null;
+      for (const d of (await kvGet("snaps")) || []) {
+        const s = await kvGet("snap-" + d);
+        if (s && s.data && !checkState(s.data).bad) {
+          raw = repairState(clone(s.data));
+          restored = d;
+          break;
+        }
+      }
+      if (!restored) raw = null;
+      logEvent("error", "storage.corrupt", restored ? "Daten beschädigt – Sicherungspunkt " + restored + " verwendet" : "Daten beschädigt – kein Sicherungspunkt");
+      setTimeout(() => toast(restored ? "Gespeicherte Daten waren beschädigt. Stand vom " + fmt(restored) + " wiederhergestellt (Original aufbewahrt)." : "Gespeicherte Daten waren beschädigt und wurden aufbewahrt. Bitte Diagnose öffnen."), 900);
+    } else {
+      raw = repairState(raw);
+      logEvent("warn", "storage.repair", health.junk + " beschädigte Einträge entfernt");
+      setTimeout(() => toast(health.junk + " beschädigte Einträge entfernt (Original aufbewahrt)"), 900);
+    }
+    if (raw) await kvPut("state", raw);
+  }
   const from = raw ? raw.v || 1 : SCHEMA;
   if (raw && from < SCHEMA) {
     const key = "safety-v" + from;
@@ -480,14 +532,39 @@ document.addEventListener("change", (e) => {
   S = raw || { v: SCHEMA, dev: uid(), memory: [], tasks: [], accent: "", lastBackup: "" };
   let ch = migrate();
   if (detectForks(S)) ch = true;
-  // Selbstständig erkannte Instagram-Anlässe (z. B. Meetup ohne Ankündigung) als Entwurf vorbereiten
-  const auto = runAutomations();
-  if (auto.length) (ch = true), logEvent("info", "studio.auto", auto.length + " Entwurf/Entwürfe automatisch erstellt"), logAction("studio.autoDraft", "auto", true, auto.length + " Entwurf/Entwürfe");
+  // Autonomie-Zyklus: Entwürfe aus bestätigten Fakten, Freigaben nur mit Berechtigung, Bericht unter „Mehr › Autonomie“
+  try {
+    const cyc = await runCycle("start");
+    const n = (k) => (cyc.steps.find((s) => s.k === k) || {}).n || 0;
+    if (n("entwuerfe")) (ch = true), logEvent("info", "studio.auto", n("entwuerfe") + " Entwurf/Entwürfe automatisch erstellt");
+    if (n("freigaben")) ch = true;
+  } catch (e) {
+    logEvent("error", "cycle", (e && e.message) || "Zyklus fehlgeschlagen");
+  }
   if (ch) await save();
   await autoSnapshot();
   LASTSNAP = ((await kvGet("snaps")) || [])[0] || null;
-  render();
+  try {
+    render();
+  } catch (e) {
+    // Notfallansicht: Daten bleiben unberührt; Wiederherstellung und Diagnose bleiben erreichbar
+    logEvent("error", "render", (e && e.message) || "Anzeige fehlgeschlagen");
+    $("#app").innerHTML = '<h1>Vivalink Management AI</h1><div class="card rec bad">Die Ansicht konnte nicht angezeigt werden. Deine Daten sind gespeichert.</div><div class="row"><button class="p" data-a="snaps">Sicherungspunkt wiederherstellen</button><button data-a="diag">Diagnose</button></div>';
+  }
   syncSoon(1500);
+  // Wieder geöffnet (App lag im Hintergrund): Zyklus höchstens alle 6 Stunden erneut
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    const last = await kvGet("cycle-last");
+    if (last && Date.now() - last.at < 6 * 3600e3) return;
+    try {
+      await runCycle("wieder geöffnet");
+      await save();
+      if ($("#sheet").hidden) render();
+    } catch (e) {
+      logEvent("error", "cycle", (e && e.message) || "Zyklus fehlgeschlagen");
+    }
+  });
   if ("serviceWorker" in navigator)
     navigator.serviceWorker.register("sw.js").catch((e) => logEvent("warn", "sw.register", (e && e.message) || "Registrierung fehlgeschlagen"));
 })();

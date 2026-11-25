@@ -166,7 +166,11 @@ let LASTSNAP = null; // Datum des letzten automatischen Sicherungspunkts
 async function autoSnapshot(force = false) {
   const idx = (await kvGet("snaps")) || [];
   const d = today();
-  if (!force && idx.includes(d)) return false;
+  if (!force && idx.includes(d)) {
+    // Sicherungspunkt des Tages beim Start auffrischen, wenn er älter als 3 Stunden ist (Änderungen des Tages sichern)
+    const cur = await kvGet("snap-" + d);
+    if (cur && Date.now() - (cur.at || 0) < 3 * 3600e3) return false;
+  }
   const ok = await kvPut("snap-" + d, { at: Date.now(), app: APP_VERSION, data: clone(S), aitest: (await aiLoad()) || [] });
   if (!ok) {
     logEvent("error", "snapshot", "Sicherungspunkt nicht gespeichert");

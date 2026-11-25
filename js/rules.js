@@ -335,7 +335,9 @@ function findings() {
     hasT = (id) => S.tasks.some((x) => !x.done && x.fid === id);
   return F.filter((f) => {
     const s = sg[f.id];
-    return !(s && s.until > t) && !hasT(f.id);
+    // Ausgeblendet bis zum Datum; „Nicht relevant“ zusätzlich nur bei gleicher oder geringerer Dringlichkeit
+    const hidden = s && (s.until > t || (s.mode === "nope" && s.sev != null && f.sev <= s.sev));
+    return !hidden && !hasT(f.id);
   }).sort((a, b) => b.score - a.score);
 }
 function pickTop(F) {
