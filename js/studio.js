@@ -118,7 +118,7 @@ function meetupCoverage(T = S) {
 }
 
 /* ---------- Planung: Termine und Themenverteilung ---------- */
-function planSlots(ym, T = S) {
+function planSlots(ym, T = S, angleUse = {}) {
   const st = T.studio,
     set = st.settings,
     F = studioFacts(T);
@@ -152,7 +152,6 @@ function planSlots(ym, T = S) {
   const used = {};
   for (const p of live) if (p.date.startsWith(ym)) used[p.pillar] = (used[p.pillar] || 0) + 1;
   let prev = null;
-  const angleUse = {};
   for (const d of days) {
     if (meet.has(d)) {
       const remind = u && Math.round((new Date(u.date + "T12:00") - new Date(d + "T12:00")) / 864e5) <= 3;
@@ -304,7 +303,8 @@ function factCheck(p, T = S) {
     /\d+\s*%\s*(rabatt|günstiger|sparen)/i.test(all)
   )
     W.push("Preis- oder Kostenangabe – Preise legt nur der Gründer fest");
-  if (/„[^“"]{12,}[“"]\s*[–—-]\s*[A-ZÄÖÜ]|\b(sagt|erzählt|berichtet|meint)\s+[A-ZÄÖÜ][a-zäöüß]+\b|erfahrungsbericht|teilnehmerin\s+[A-ZÄÖÜ]|teilnehmer\s+[A-ZÄÖÜ]/i.test(all))
+  // Großschreibung zählt (Namen): daher ohne i-Flag, sonst gilt „erzählt und …“ als „erzählt + Name“
+  if (/„[^“"]{12,}[“"]\s*[–—-]\s*[A-ZÄÖÜ]|\b(sagt|erzählt|berichtet|meint)\s+[A-ZÄÖÜ][a-zäöüß]+\b|\b[Tt]eilnehmer(in)?\s+[A-ZÄÖÜ][a-zäöüß]+\b/.test(all) || /erfahrungsbericht/i.test(all))
     W.push("Möglicher Erfahrungsbericht oder Zitat – nur mit echter, belegter Quelle verwenden");
   if (/garantiert|100\s*%|immer neue freunde|beste[nr]? (app|community)|nr\.\s*1/i.test(all)) W.push("Mögliches Versprechen oder Superlativ");
   if (/(apps\.apple\.com|play\.google\.com|bit\.ly|https?:\/\/)/i.test(all) && !/(apps\.apple\.com|play\.google\.com)/i.test(allowed)) W.push("Enthält einen Link, der nicht aus den Fakten stammt");
@@ -364,6 +364,8 @@ function makePost(x, source, T = S) {
   };
   if (IS_TEST) p.demo = true; // Testversion: jeder Beitrag ist künstlich und wird in der echten App abgelehnt
   if (p.pillar === "meetup" && !p.meetupDate && T.meetup && T.meetup.date && p.date && p.date <= T.meetup.date) p.meetupDate = T.meetup.date;
+  // Art eines Meetup-Beitrags ohne Angabe: bis 3 Tage vorher Erinnerung, sonst Ankündigung
+  if (p.pillar === "meetup" && !KINDS[x.kind] && p.meetupDate && p.date) p.kind = Math.round((new Date(p.meetupDate + "T12:00") - new Date(p.date + "T12:00")) / 864e5) <= 3 ? "erinnerung" : "ankuendigung";
   p.variant = Number.isInteger(x.variant) && x.variant >= 0 && x.variant < DESIGNS.length ? x.variant : pickVariant(p.date, T);
   checkPost(p, T);
   touch(p);
@@ -395,8 +397,9 @@ function importPlan(text, T = S, source = "ki") {
   for (const x of r.items) {
     const p = makePost(x, source, T);
     if (!p.caption && !p.slides.some((s) => s.title || s.text)) continue;
-    // Dieselbe Antwort zweimal eingefügt → keine doppelten Beiträge
-    if (have.has(key(p))) {
+    // Dieselbe Antwort zweimal eingefügt → keine doppelten Beiträge; Meetup-Erinnerung/-Ankündigung nicht doppelt
+    const sameMeetup = p.pillar === "meetup" && p.meetupDate && T.studio.posts.some((q) => !q.deleted && q.status !== "abgelehnt" && q.pillar === "meetup" && q.meetupDate === p.meetupDate && (q.kind || q.auto) === p.kind);
+    if (have.has(key(p)) || sameMeetup) {
       dupes++;
       continue;
     }

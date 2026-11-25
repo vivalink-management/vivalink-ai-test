@@ -178,8 +178,9 @@ function taskPackage(T = S) {
   const pub = { ...T, memory: T.memory.filter((m) => m.cat !== "Geschäftsmodell") };
   const ym = today().slice(0, 7);
   const lim = addDays(today(), 14);
-  const slots = planSlots(ym, pub)
-    .concat(planSlots(nextMonth(ym), pub))
+  const used = {}; // Blickwinkel über den Monatswechsel hinweg nicht wiederholen
+  const slots = planSlots(ym, pub, used)
+    .concat(planSlots(nextMonth(ym), pub, used))
     .filter((s) => s.date <= lim);
   return {
     format: TASK_FORMAT,
