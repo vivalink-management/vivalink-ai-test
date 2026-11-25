@@ -41,6 +41,7 @@ const EXPLAIN = {
   "ig-rate": { mean: "Ohne Ergebnisse kann die Planung nicht lernen, was funktioniert.", causes: [], measures: [{ t: "Reichweite und Interaktionen eintragen", n: 2, d: 1, a: 1 }] },
   "sys-cf": { mean: "Bis zur Entscheidung gilt die neuere Version; die andere bleibt erhalten.", causes: ["Dieselben Daten wurden auf zwei Geräten unterschiedlich geändert"], measures: [{ t: "Konflikte unter „Mehr“ entscheiden", n: 2, d: 3, a: 1 }] },
   "sys-err": { mean: "Technische Fehler können einzelne Funktionen beeinträchtigen.", causes: [], measures: [{ t: "Diagnosebericht kopieren und als Reparaturauftrag übergeben", n: 2, d: 2, a: 1 }] },
+  "sys-auto": { mean: "Ohne regelmäßige Läufe fehlen Wochenentwürfe, Analysen oder technische Prüfungen.", causes: ["Kontingent des Claude-Pro-Abos erschöpft", "Geplante Aufgabe pausiert oder geändert", "Postfach-Schlüssel ersetzt"], measures: [{ t: "Status unter „Mehr › Autonomie“ prüfen und Claude Bescheid geben", n: 2, d: 2, a: 1 }] },
   "sys-snap": { mean: "Ohne automatische Sicherung wären Daten bei einem Fehler schwerer wiederherzustellen.", causes: ["Speicher des Geräts voll oder gesperrt"], measures: [{ t: "Diagnose öffnen und Speichertest prüfen", n: 3, d: 3, a: 1 }] },
 };
 function explainKey(id) {
@@ -49,6 +50,7 @@ function explainKey(id) {
   if (/^m-go-/.test(id)) return "m-go";
   if (/^m-(st-|old|nv)/.test(id)) return "m-stale";
   if (/^ms-/.test(id)) return null;
+  if (/^sys-auto-/.test(id)) return "sys-auto";
   return null;
 }
 function enrich(f) {

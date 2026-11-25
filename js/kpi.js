@@ -78,3 +78,55 @@ async function kpiSync() {
   logAction("kpi.fetch", "auto", true, n + " Werte");
   return { ok: true, n, ignored: v.ignored };
 }
+
+/* Im Zyklus: höchstens alle 6 Stunden abrufen (Stufe 0, nur lesend) */
+async function kpiAuto() {
+  const cfg = await kpiCfg();
+  if (!kpiUrl() || !cfg || navigator.onLine === false) return null;
+  if (cfg.last && Date.now() - cfg.last < 6 * 3600e3) return null;
+  const r = await kpiSync();
+  return r.ok ? r.n + " Kennzahlen aus der Verwaltung" : "Verwaltung: " + r.error;
+}
+async function kpiRemove() {
+  await kvPut("kpi-config", null);
+  logEvent("info", "kpi.remove", "Kopplung mit der Verwaltung entfernt");
+}
+/* ---------- Oberfläche („Mehr › Kennzahlen aus der Verwaltung“) ---------- */
+async function kpiSheet() {
+  const cfg = await kpiCfg();
+  const fromV = S.metrics.reduce((n, m) => n + m.entries.filter((e) => !e.deleted && e.src === "verwaltung").length, 0);
+  sheet(`<h1>Kennzahlen aus der Verwaltung</h1><p class="mut">Nur zusammengefasste Zahlen (z. B. Registrierungen, aktive Nutzer, Anmeldungen) aus den vorhandenen Auswertungen der Vivalink-Verwaltung. Keine Personendaten; Antworten mit unbekannten Feldern werden komplett abgelehnt.</p>${
+    !kpiUrl()
+      ? '<div class="card rec warn">Vorbereitet. Die Gegenstelle in der Verwaltung (Supabase) ist noch nicht eingerichtet – das braucht deine gesonderte Freigabe (Anleitung: docs/AUFTRAG-VERWALTUNG.md). Bis dahin trägst du Kennzahlen auf der Startseite ein.</div>'
+      : cfg
+        ? `<div class="card"><div>Status: <b>gekoppelt</b></div><div class="mut">Zuletzt abgerufen: ${cfg.last ? new Date(cfg.last).toLocaleString("de-DE") : "noch nie"} · übernommene Werte: ${fromV}</div><div class="mut">Abruf automatisch höchstens alle 6 Stunden beim Öffnen der App.</div></div><div class="row"><button class="p" data-a="kpNow">Jetzt abrufen</button><button data-a="kpOff">Kopplung entfernen</button></div>`
+        : `<div class="card"><b>Mit der Verwaltung koppeln</b><p class="mut">In der Verwaltung unter „Management AI“ einen Kopplungscode erzeugen (6–8 Ziffern, 10 Minuten gültig) und hier eingeben.</p><input id="kpCode" inputmode="numeric" autocomplete="off" placeholder="Kopplungscode"><button class="p" data-a="kpPair">Koppeln</button></div>`
+  }<button data-a="close">Schließen</button>`);
+}
+async function kpiAction(a) {
+  if (a === "kpi") return kpiSheet();
+  if (a === "kpPair") {
+    const r = await kpiPair(val("kpCode").trim());
+    if (!r.ok) return toast(r.error);
+    const s = await kpiSync(); // protokolliert selbst
+    toast("Gekoppelt" + (s.ok ? " · " + s.n + " Werte übernommen" : ""));
+    render();
+    return kpiSheet();
+  }
+  if (a === "kpNow") {
+    const s = await kpiSync();
+    toast(s.ok ? s.n + " Werte übernommen" : s.error);
+    render();
+    return kpiSheet();
+  }
+  if (a === "kpOff") {
+    if (window._kpo !== 1) {
+      window._kpo = 1;
+      return toast("Nochmal tippen: Kopplung entfernen (Kennzahlen bleiben erhalten)");
+    }
+    window._kpo = 0;
+    await kpiRemove();
+    toast("Kopplung entfernt");
+    return kpiSheet();
+  }
+}

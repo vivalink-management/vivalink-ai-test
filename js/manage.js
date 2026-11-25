@@ -172,43 +172,119 @@ function applyActions(items, chosen, T = S) {
 /* Ergänzt Arbeitsaufträge um den maschinenlesbaren Aufgabenblock */
 const ACT_INSTRUCTION = `\n5. Ganz am Ende genau ein Block \`\`\`json mit höchstens 5 konkreten Aufgaben aus deinen Empfehlungen:\n{"format":"${ACT_FORMAT}","version":1,"tasks":[{"title":"konkrete Aufgabe (max. 12 Wörter)","prio":"hoch|mittel|niedrig","area":"${CATS.join("|")}","dueDays":7,"why":"kurze Begründung","after":null}]}\n„after“ = Nummer einer Aufgabe dieser Liste, die vorher erledigt sein muss (oder null). Preise, Zahlungen, bezahlte Werbung und Verträge nur als Entscheidungsvorschlag an mich formulieren.`;
 
-/* ---------- Wochenbericht (feste Regeln, keine KI) ---------- */
+/* ---------- Wochenbericht (feste Regeln, keine KI) ----------
+   Vergleich mit der Vorwoche, 4-Wochen-Trend je Kennzahl, automatisch erkannte wichtige Entwicklungen,
+   priorisierte Empfehlungen und Erfolgskontrolle. Trends beschreiben Veränderungen, keine Ursachen. */
+const dayMs = (d) => new Date(d + "T12:00").getTime();
+/* Trend einer Kennzahl über „days“ Tage: Steigung je Woche (lineare Regression), relativ zum Mittelwert */
+function metricTrend(m, end = today(), days = 28) {
+  const from = addDays(end, -days);
+  const pts = valid(m).filter((e) => e.date > from && e.date <= end);
+  if (pts.length < 3) return null;
+  const xs = pts.map((e) => dayMs(e.date) / (7 * 864e5)),
+    ys = pts.map((e) => e.value);
+  const mx = xs.reduce((a, b) => a + b, 0) / xs.length,
+    my = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const den = xs.reduce((a, x) => a + (x - mx) ** 2, 0);
+  if (!den) return null;
+  const slope = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / den; // je Woche
+  const rel = my ? slope / Math.abs(my) : 0;
+  const dir = Math.abs(rel) < 0.05 ? "stabil" : slope > 0 ? "steigend" : "fallend";
+  return { n: pts.length, slope, rel, dir, first: pts[0], last: pts[pts.length - 1] };
+}
+/* Wert zu einem Stichtag (letzter gültiger Wert bis dahin) */
+const valueAt = (m, d) => valid(m).filter((e) => e.date <= d).pop() || null;
+/* Wichtige Entwicklungen automatisch erkennen und nach Bedeutung ordnen */
+function keyDevelopments(T = S, end = today()) {
+  const out = [];
+  for (const m of T.metrics) {
+    const def = MT.find((x) => x.k === m.key),
+      dir = def ? def.d : "neutral";
+    const tr = metricTrend(m, end);
+    const now = valueAt(m, end),
+      prev = valueAt(m, addDays(end, -7));
+    const goal = m.goal !== "" && m.goal != null && Number(m.goal) > 0 ? Number(m.goal) : null;
+    if (tr && tr.dir !== "stabil" && dir !== "neutral") {
+      const bad = (tr.dir === "fallend") === (dir === "up");
+      out.push({ w: Math.abs(tr.rel) * (bad ? 2 : 1), bad, text: `${m.name}: ${tr.dir} über 4 Wochen (${tr.slope > 0 ? "+" : ""}${num(Math.round(tr.slope * 10) / 10)} je Woche, ${tr.n} Werte)` });
+    }
+    if (goal && now && dir === "up" && now.value < goal * 0.8) out.push({ w: 1 - now.value / goal, bad: true, text: `${m.name}: ${num(now.value)} von Ziel ${num(goal)} (${Math.round((now.value / goal) * 100)} %)` });
+    if (now && prev && prev.value && now.date !== prev.date && dir !== "neutral") {
+      const p = (now.value - prev.value) / Math.abs(prev.value);
+      if (Math.abs(p) >= 0.2) out.push({ w: Math.abs(p), bad: (p < 0) === (dir === "up"), text: `${m.name}: ${p > 0 ? "+" : ""}${Math.round(p * 100)} % gegenüber der Vorwoche` });
+    }
+  }
+  return out.sort((a, b) => b.w - a.w).slice(0, 5);
+}
+/* Gewicht je Kennzahl nach der Zielrangfolge des Gründers */
+const GOAL_WEIGHT = { reg_total: 3, reg_week: 3, active_users: 2, signups: 2, attend: 2, noshow: 1, invites: 1, invite_rate: 1, ig_fol: 1, ig_reach: 1, web: 1 };
+const metricOf = (f) => (f.id.startsWith("mt-") ? "signups" : (f.id.match(/^m-(?:go|tr|7|st)-(.+)$/) || [])[1] || null);
+const goalPriority = (f) => f.score + (GOAL_WEIGHT[metricOf(f)] || 0) * 6;
 function weeklyReport(T = S, end = today()) {
   const start = addDays(end, -6),
-    inR = (d) => d && d >= start && d <= end;
+    pStart = addDays(end, -13),
+    pEnd = addDays(end, -7);
+  const inR = (d, a = start, b = end) => d && d >= a && d <= b;
   const dayOf = (ms) => (ms ? new Date(ms).toLocaleDateString("sv-SE") : "");
   const L = liveTasks(T);
   const done = L.filter((x) => x.done && inR(dayOf(x.doneAt)));
+  const doneP = L.filter((x) => x.done && inR(dayOf(x.doneAt), pStart, pEnd));
   const overdue = L.filter((x) => !x.done && x.due && x.due < end);
   const P = T.studio ? livePosts(T) : [];
-  const pub = P.filter((p) => p.status === "veroeffentlicht" && inR(p.date || dayOf(p.publishedAt)));
+  const pubOf = (a, b) => P.filter((p) => p.status === "veroeffentlicht" && inR(p.date || dayOf(p.publishedAt), a, b));
+  const pub = pubOf(start, end),
+    pubP = pubOf(pStart, pEnd);
   const next = P.filter((p) => p.date && p.date > end && p.date <= addDays(end, 7) && p.status !== "abgelehnt");
   const ms = L.filter((x) => x.measure);
-  const D = developments(T);
+  const vs = (a, b) => `${a} (Vorwoche ${b}${a === b ? ", gleich" : a > b ? ", mehr" : ", weniger"})`;
+  const trends = T.metrics.map((m) => ({ m, t: metricTrend(m, end) })).filter((x) => x.t);
+  const K = keyDevelopments(T, end);
+  // Reihenfolge nach Bedeutung für die Ziele (Registrierungen vor Meetup-Anmeldungen vor Bekanntheit), je Kennzahl nur ein Eintrag
+  const seenM = new Set();
+  const F = findings()
+    .filter((f) => f.sev >= 1)
+    .map((f) => ({ f, w: goalPriority(f) }))
+    .sort((a, b) => b.w - a.w)
+    .filter(({ f }) => {
+      const k = metricOf(f);
+      if (!k) return true;
+      if (seenM.has(k)) return false;
+      seenM.add(k);
+      return true;
+    })
+    .slice(0, 3)
+    .map(({ f }) => enrich(f));
   const u = T.meetup;
   const lines = [
     `Wochenbericht ${fmt(start)} – ${fmt(end)}`,
     "",
+    "WICHTIGE ENTWICKLUNGEN (automatisch erkannt, keine Ursachen)",
+    K.length ? K.map((k) => `- ${k.bad ? "⚠ " : ""}${k.text}`).join("\n") : "- keine auffälligen Veränderungen (zu wenige oder stabile Werte)",
+    "",
     "ERLEDIGT",
-    done.length ? done.map((x) => "- " + x.title).join("\n") : "- keine Aufgaben erledigt",
+    `- Aufgaben erledigt: ${vs(done.length, doneP.length)}`,
+    done.length ? done.map((x) => "  · " + x.title).join("\n") : null,
     "",
     "INSTAGRAM",
-    `- veröffentlicht: ${pub.length}${pub.length ? " (" + pub.map((p) => p.title).join(", ") + ")" : ""}`,
+    `- veröffentlicht: ${vs(pub.length, pubP.length)}${pub.length ? " – " + pub.map((p) => p.title).join(", ") : ""}`,
     `- nächste 7 Tage geplant: ${next.length} (davon freigegeben: ${next.filter((p) => p.status === "freigegeben").length})`,
     pub.filter((p) => !p.metrics).length ? `- ohne eingetragene Ergebnisse: ${pub.filter((p) => !p.metrics).length}` : null,
     "",
-    "ENTWICKLUNGEN (Veränderung, keine Ursachen)",
-    D.length ? D.map((x) => `- ${x.name}: ${x.now} (${x.d > 0 ? "+" : ""}${x.p != null ? x.p + " %" : num(x.d)} in ${x.span} Tagen)`).join("\n") : "- keine vergleichbaren Werte",
+    "KENNZAHLEN – TREND ÜBER 4 WOCHEN",
+    trends.length ? trends.map((x) => `- ${x.m.name}: ${x.t.dir} (${num(x.t.first.value)} → ${num(x.t.last.value)}, ${x.t.n} Werte)`).join("\n") : "- zu wenige Werte für einen Trend (mindestens 3 in 4 Wochen)",
     "",
-    "MASSNAHMEN",
-    `- laufend: ${ms.filter((x) => !x.measure.outcome).length} · ausgewertet diese Woche: ${ms.filter((x) => inR(x.measure.evaluatedAt)).length}`,
+    "PRIORISIERTE EMPFEHLUNGEN",
+    F.length ? F.map((f, i) => `${i + 1}. ${f.title} → ${f.measures[0] ? f.measures[0].t + " (Priorität " + f.measures[0].prio + ", Risiko: " + measureRisk(f.measures[0]) + ")" : f.action}`).join("\n") : "- kein dringender Handlungsbedarf erkannt",
+    "",
+    "ERFOLGSKONTROLLE MASSNAHMEN (zeitlicher Zusammenhang, kein Ursachenbeweis)",
+    ms.length ? ms.slice(0, 5).map((x) => `- ${x.title}: ${x.measure.outcome ? "Ergebnis " + x.measure.outcome : "läuft, Prüfung " + fmt(x.measure.checkAt)} · ${measureLine(x, T)}`).join("\n") : "- keine Maßnahmen gestartet",
     "",
     "OFFEN",
     `- überfällige Aufgaben: ${overdue.length}`,
     `- Entscheidungen für dich: ${decisionsList(T).length}`,
     u && u.date && u.date >= end ? `- nächstes Meetup: ${fmt(u.date)}` : null,
   ].filter((x) => x != null);
-  return { start, end, text: lines.join("\n"), n: { done: done.length, pub: pub.length, next: next.length, overdue: overdue.length } };
+  return { start, end, text: lines.join("\n"), n: { done: done.length, doneP: doneP.length, pub: pub.length, pubP: pubP.length, next: next.length, overdue: overdue.length }, key: K, trends: trends.length };
 }
 async function reportSheet() {
   const r = weeklyReport();

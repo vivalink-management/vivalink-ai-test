@@ -75,7 +75,9 @@ async function cycleOnce(reason, T) {
   // Eindeutige Datenfehler selbst beheben (Stufe 1: mit Rückgängig-Punkt und Protokoll)
   const rp = await autoRepair(T);
   const tk = await taskAuto();
-  step("erfassen", rp.n || null, [syncUrl() ? "Synchronisierung angebunden" : "Synchronisierung nicht angebunden", window.VL_KPI_URL ? "Verwaltung angebunden" : "Kennzahlen manuell", rp.n ? rp.n + " Datenfehler behoben" : null, tk].filter(Boolean).join(" · "));
+  await loadAutoState();
+  const kp = typeof kpiAuto === "function" ? await kpiAuto() : null;
+  step("erfassen", rp.n || null, [syncUrl() ? "Synchronisierung angebunden" : "Synchronisierung nicht angebunden", window.VL_KPI_URL ? "Verwaltung angebunden" : "Kennzahlen manuell", rp.n ? rp.n + " Datenfehler behoben" : null, tk, kp].filter(Boolean).join(" · "));
   // 2. Analyse (Regelmotor)
   const F = findings();
   step("analysieren", F.length, F.filter((f) => f.sev >= 2).length + " davon dringend");
@@ -174,6 +176,14 @@ function analysisPrompt() {
     ai = keep;
   }
 }
+/* Zusatzanleitung für die geplante Wochenanalyse: Vergleich, Trends, Prioritäten, Erfolgskontrolle */
+const ANALYSIS_GUIDE = `
+
+ZUSATZ FÜR DIE WÖCHENTLICHE ANALYSE
+- Nutze den beigefügten Wochenbericht (analyse.report) und vergleiche mit den früheren Wochenberichten (analyse.previous): Was hat sich verändert, was wiederholt sich?
+- Ordne deine Empfehlungen nach Wirkung auf die Ziele (Registrierungen vor Meetup-Anmeldungen vor Bekanntheit) und Aufwand; nenne bei jeder Empfehlung, woran man in 1–2 Wochen den Erfolg erkennt (Kennzahl, Zielwert oder Beobachtung).
+- Bewerte laufende Maßnahmen anhand der Erfolgskontrolle nur als zeitlichen Zusammenhang – keine Ursachenbehauptungen.
+- Wenn Daten fehlen oder zu wenige Werte vorliegen, sag das ausdrücklich und schlage vor, welche Angabe der Gründer erfassen sollte.`;
 function taskPackage(T = S) {
   const pub = { ...T, memory: T.memory.filter((m) => m.cat !== "Geschäftsmodell") };
   const ym = today().slice(0, 7);
@@ -188,7 +198,7 @@ function taskPackage(T = S) {
     id: uid(),
     createdAt: new Date().toISOString(),
     studio: { slots, prompt: slots.length ? studioPrompt(ym, pub, slots) : "", answerFormat: PLAN_FORMAT },
-    analyse: { report: weeklyReport(T).text, prompt: analysisPrompt(), answerFormat: ACT_FORMAT },
+    analyse: { report: weeklyReport(T).text, prompt: analysisPrompt() + ANALYSIS_GUIDE, answerFormat: ACT_FORMAT, previous: [] },
   };
 }
 async function taskPublish(api = null) {
@@ -196,6 +206,7 @@ async function taskPublish(api = null) {
   if (!c) return { ok: false, error: "Aufgaben-Postfach nicht eingerichtet" };
   const A = api || taskHttp(syncUrl(), c.token);
   const pkg = taskPackage();
+  pkg.analyse.previous = ((await kvGet("reports")) || []).slice(0, 4).map((r) => r.text);
   for (let i = 0; i < 3; i++) {
     const cur = await A.get("out");
     const r = await A.put("out", JSON.stringify(pkg), cur ? cur.version : 0);
@@ -208,50 +219,134 @@ async function taskPublish(api = null) {
 }
 let PROPOSALS = [];
 const loadProposals = async () => (PROPOSALS = (await kvGet("proposals")) || []);
+/* Ergebnis-Postfach „in“: Liste von Einträgen (Inhalte der Wochenaufgabe, Rückmeldungen der Wartung).
+   Jeder Eintrag wird genau einmal verarbeitet; geleert wird atomar (nur wenn seitdem nichts Neues hinzukam). */
+const resultEntries = (o) => (o && Array.isArray(o.entries) ? o.entries : o ? [o] : []);
+async function recordRun(h) {
+  const L = (await kvGet("task-history")) || [];
+  if (L.some((x) => x.id === h.id)) return;
+  L.unshift(h);
+  await kvPut("task-history", L.slice(0, 40));
+}
 async function taskFetch(api = null) {
   const c = await taskCfg();
   if (!c) return { ok: false, error: "Aufgaben-Postfach nicht eingerichtet" };
   const A = api || taskHttp(syncUrl(), c.token);
   const cur = await A.get("in");
-  if (!cur) return { ok: true, added: 0, detail: "keine Ergebnisse" };
+  c.lastCheck = Date.now(); // belegt: Abholung versucht (für die Erkennung ausgebliebener Läufe)
+  if (!cur) {
+    await kvPut("task-config", c);
+    return { ok: true, added: 0, detail: "keine Ergebnisse" };
+  }
   let o;
   try {
     o = JSON.parse(cur.body);
   } catch (e) {
+    await kvPut("task-config", c);
     return { ok: false, error: "Ergebnis nicht lesbar – nichts übernommen" };
   }
-  if (!o || o.format !== TASK_RESULT || !isId(o.id)) return { ok: false, error: "Unbekanntes Ergebnisformat – nichts übernommen" };
-  if ((c.done || []).includes(o.id)) return { ok: true, added: 0, detail: "bereits übernommen" };
-  const rep = { added: 0, warned: 0, analysis: false, proposals: 0 };
-  if (o.posts) {
-    const r = importPlan(typeof o.posts === "string" ? o.posts : JSON.stringify(o.posts), S, "ki-aufgabe");
-    if (r.ok) (rep.added = r.added.length), (rep.warned = r.warned);
-  }
-  const an = o.analysis && typeof o.analysis === "object" ? o.analysis : null;
-  if (an && typeof an.text === "string" && an.text.trim()) {
-    const title = "KI-Wochenanalyse " + fmt(today());
-    if (!S.memory.some((m) => m.active && m.title === title)) {
-      const n = { id: uid(), cat: "Ziele", title, text: an.text.trim().slice(0, 8000), status: "estimate", date: today(), reason: "Geplante Claude-Aufgabe – Einschätzung, bitte prüfen", result: "", private: false, active: true, createdAt: Date.now(), dev: S.dev, src: "ki-aufgabe" };
-      touch(n);
-      S.memory.push(n);
-      rep.analysis = true;
+  if (!o || o.format !== TASK_RESULT) return { ok: false, error: "Unbekanntes Ergebnisformat – nichts übernommen" };
+  const rep = { added: 0, warned: 0, analysis: false, proposals: 0, heartbeats: 0, entries: 0 };
+  for (const e of resultEntries(o)) {
+    if (!e || !isId(e.id) || (c.done || []).includes(e.id)) continue;
+    rep.entries++;
+    const at = Date.parse(e.at) || Date.now();
+    if (e.heartbeat && typeof e.heartbeat === "object") {
+      // Rückmeldung einer geplanten Aufgabe (z. B. Wartung): nur Art, Erfolg und kurze Zusammenfassung ohne Unternehmensdaten
+      const hb = e.heartbeat;
+      await recordRun({ id: e.id, kind: AUTOMATIONS.some((a) => a.id === hb.kind) ? hb.kind : "sonstige", at, received: Date.now(), ok: hb.ok === true, summary: redact(String(hb.summary || "")).slice(0, 300) });
+      rep.heartbeats++;
+    } else {
+      const r1 = { added: 0, warned: 0, analysis: false, proposals: 0 };
+      if (e.posts) {
+        const r = importPlan(typeof e.posts === "string" ? e.posts : JSON.stringify(e.posts), S, "ki-aufgabe");
+        if (r.ok) (r1.added = r.added.length), (r1.warned = r.warned);
+      }
+      const an = e.analysis && typeof e.analysis === "object" ? e.analysis : null;
+      if (an && typeof an.text === "string" && an.text.trim()) {
+        const title = "KI-Wochenanalyse " + fmt(new Date(at).toLocaleDateString("sv-SE"));
+        if (!S.memory.some((m) => m.active && m.title === title)) {
+          const n = { id: uid(), cat: "Ziele", title, text: an.text.trim().slice(0, 8000), status: "estimate", date: today(), reason: "Geplante Claude-Aufgabe – Einschätzung, bitte prüfen", result: "", private: false, active: true, createdAt: Date.now(), dev: S.dev, src: "ki-aufgabe" };
+          touch(n);
+          S.memory.push(n);
+          r1.analysis = true;
+        }
+      }
+      if (an && an.actions) {
+        const pa = parseActions(typeof an.actions === "string" ? an.actions : JSON.stringify(an.actions));
+        if (pa.ok && pa.items.length) {
+          PROPOSALS = [{ id: e.id, at: Date.now(), items: pa.items }, ...PROPOSALS.filter((p) => p.id !== e.id)].slice(0, 5);
+          await kvPut("proposals", PROPOSALS);
+          r1.proposals = pa.items.length;
+        }
+      }
+      // Nur belegte Ergebnisse zählen: ein Lauf ohne verwertbaren Inhalt gilt als Problem
+      const useful = r1.added || r1.analysis || r1.proposals;
+      await recordRun({ id: e.id, kind: "inhalte", at, received: Date.now(), ok: !!useful, summary: useful ? `${r1.added} Entwürfe${r1.warned ? " (" + r1.warned + " mit Prüfhinweis)" : ""}${r1.analysis ? ", Wochenanalyse" : ""}${r1.proposals ? ", " + r1.proposals + " Aufgabenvorschläge" : ""}` : "Ergebnis ohne verwertbaren Inhalt", posts: r1.added, warned: r1.warned, analysis: r1.analysis, proposals: r1.proposals });
+      rep.added += r1.added;
+      rep.warned += r1.warned;
+      rep.analysis = rep.analysis || r1.analysis;
+      rep.proposals += r1.proposals;
     }
+    c.done = [...(c.done || []), e.id].slice(-80);
   }
-  if (an && an.actions) {
-    const pa = parseActions(typeof an.actions === "string" ? an.actions : JSON.stringify(an.actions));
-    if (pa.ok && pa.items.length) {
-      PROPOSALS = [{ id: o.id, at: Date.now(), items: pa.items }, ...PROPOSALS.filter((p) => p.id !== o.id)].slice(0, 5);
-      await kvPut("proposals", PROPOSALS);
-      rep.proposals = pa.items.length;
-    }
-  }
-  c.done = [...(c.done || []), o.id].slice(-50);
-  c.lastIn = Date.now();
+  c.lastIn = rep.entries ? Date.now() : c.lastIn;
   await kvPut("task-config", c);
   await save();
-  await A.del("in").catch(() => {});
-  return { ok: true, ...rep, detail: `${rep.added} Entwürfe${rep.analysis ? ", Wochenanalyse" : ""}${rep.proposals ? ", " + rep.proposals + " Aufgabenvorschläge" : ""} übernommen` };
+  // Atomar leeren: nur wenn das Postfach seit dem Lesen unverändert ist (sonst beim nächsten Mal weiter)
+  await A.put("in", JSON.stringify({ format: TASK_RESULT, version: 3, entries: [] }), cur.version).catch(() => {});
+  const parts = [];
+  if (rep.added || rep.entries) parts.push(rep.added + " Entwürfe");
+  if (rep.analysis) parts.push("Wochenanalyse");
+  if (rep.proposals) parts.push(rep.proposals + " Aufgabenvorschläge");
+  if (rep.heartbeats) parts.push(rep.heartbeats + " Rückmeldung(en)");
+  return { ok: true, ...rep, detail: rep.entries ? parts.join(", ") + " übernommen" : "keine neuen Ergebnisse" };
 }
+
+/* ---------- Überwachung der geplanten Aufgaben (nur belegte Ergebnisse zählen) ---------- */
+const AUTOMATIONS = [
+  { id: "wartung", name: "Technische Wartung", day: 1, time: "04:43", what: "Tests, Abgleich der veröffentlichten Version, Fehlerbehebung auf eigenem Zweig" },
+  { id: "inhalte", name: "Instagram-Entwürfe und Wochenanalyse", day: 1, time: "05:17", what: "Entwürfe für 14 Tage, Wochenanalyse, Aufgabenvorschläge" },
+];
+/* Letzter planmäßiger Zeitpunkt vor „now“ (Ortszeit des Geräts) */
+function lastScheduled(a, now = Date.now()) {
+  const [h, m] = a.time.split(":").map(Number);
+  const d = new Date(now);
+  d.setHours(h, m, 0, 0);
+  const back = (d.getDay() - a.day + 7) % 7;
+  d.setDate(d.getDate() - back);
+  if (d.getTime() > now) d.setDate(d.getDate() - 7);
+  return d.getTime();
+}
+async function automationStatus(now = Date.now()) {
+  const c = await taskCfg();
+  const H = (await kvGet("task-history")) || [];
+  return AUTOMATIONS.map((a) => {
+    const runs = H.filter((x) => x.kind === a.id).sort((x, y) => y.at - x.at);
+    const last = runs[0] || null,
+      lastOk = runs.find((x) => x.ok) || null;
+    const due = lastScheduled(a, now),
+      next = due + 7 * 864e5;
+    const base = { ...a, last, lastOk, runs: runs.slice(0, 5), next };
+    if (!c) return { ...base, state: "aus", label: "nicht eingerichtet" };
+    if (a.id === "wartung" && !runs.length) return { ...base, state: "unbelegt", label: "keine Rückmeldung bisher (meldet sich ab Version 2.6)" };
+    if (due < (c.since || 0)) return { ...base, state: "wartet", label: "erste Ausführung am " + new Date(next).toLocaleDateString("de-DE") };
+    if (last && last.at >= due - 3600e3) return last.ok ? { ...base, state: "ok", label: "erfolgreich am " + new Date(last.at).toLocaleDateString("de-DE") } : { ...base, state: "fehler", label: "Problem gemeldet: " + last.summary };
+    // Kein Ergebnis zum letzten Termin: erst als ausgeblieben werten, wenn die App danach mit Abstand nachgesehen hat
+    if ((c.lastCheck || 0) > due + 2 * 3600e3) return { ...base, state: "ausgeblieben", label: "Ausführung vom " + new Date(due).toLocaleDateString("de-DE") + " ohne Ergebnis" };
+    return { ...base, state: "offen", label: "Ergebnis vom " + new Date(due).toLocaleDateString("de-DE") + " noch nicht abgeholt" };
+  });
+}
+let AUTO_STATE = [];
+const loadAutoState = async () => (AUTO_STATE = await automationStatus());
+function automationsHtml(L) {
+  const col = { ok: "var(--ok)", fehler: "var(--bad)", ausgeblieben: "var(--bad)", offen: "var(--mut)", wartet: "var(--mut)", unbelegt: "var(--warn)", aus: "var(--mut)" };
+  return L.map(
+    (a) => `<div class="card auto" data-auto="${esc(a.id)}"><div class="row sp" style="flex-wrap:nowrap"><b>${esc(a.name)}</b><span class="chip" style="color:${col[a.state]};border-color:${col[a.state]}">${esc(a.state === "ok" ? "OK" : a.state === "fehler" || a.state === "ausgeblieben" ? "Problem" : a.state === "unbelegt" ? "unbelegt" : "wartet")}</span></div>
+<div class="mut">${esc(a.what)} · wöchentlich, ${["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"][a.day]} ${esc(a.time)} Uhr</div><div>${esc(a.label)}</div>${a.lastOk ? `<div class="mut">Zuletzt belegt erfolgreich: ${new Date(a.lastOk.at).toLocaleString("de-DE", { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" })} – ${esc(a.lastOk.summary)}</div>` : ""}${a.state !== "aus" ? `<div class="mut">Nächster Termin: ${new Date(a.next).toLocaleDateString("de-DE")}</div>` : ""}</div>`,
+  ).join("");
+}
+
 /* Im Zyklus: Ergebnisse abholen (Stufe 0), Auftrag höchstens alle 20 Stunden erneuern (Stufe 1) */
 async function taskAuto() {
   const c = await taskCfg();
@@ -296,7 +391,7 @@ async function autonomySheet(extra = "") {
     .sort((a, b) => lvl(a) - lvl(b))
     .map((k) => `<div class="row sp" style="flex-wrap:nowrap"><span>${esc(POLICY[k].n)}</span><span class="chip">${LVL[lvl(k)]}${activeGrant(k) ? " · Berechtigung aktiv" : ""}</span></div>`)
     .join("")}</div>
-<h2>Geplante KI-Aufgaben</h2><div class="card">${
+<h2>Geplante KI-Aufgaben</h2>${tc && syncUrl() ? automationsHtml(await automationStatus()) : ""}<div class="card">${
     !syncUrl()
       ? '<div class="mut">Vorbereitet. Braucht den Synchronisierungs-Server (Entscheidung offen). Bis dahin: Monatsplan im Studio per „Auftrag kopieren“.</div>'
       : tc

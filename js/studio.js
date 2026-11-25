@@ -397,6 +397,7 @@ function importPlan(text, T = S, source = "ki") {
   for (const x of r.items) {
     const p = makePost(x, source, T);
     if (!p.caption && !p.slides.some((s) => s.title || s.text)) continue;
+    polishPost(p, T); // formale Kleinigkeiten automatisch, transparent vermerkt
     // Dieselbe Antwort zweimal eingefügt → keine doppelten Beiträge; Meetup-Erinnerung/-Ankündigung nicht doppelt
     const sameMeetup = p.pillar === "meetup" && p.meetupDate && T.studio.posts.some((q) => !q.deleted && q.status !== "abgelehnt" && q.pillar === "meetup" && q.meetupDate === p.meetupDate && (q.kind || q.auto) === p.kind);
     if (have.has(key(p)) || sameMeetup) {
@@ -638,6 +639,42 @@ function checkPost(p, T = S) {
   p.warnings = factCheck(p, T);
   p.hints = styleCheck(p, T);
 }
+
+/* Automatische Feinarbeit an KI-Entwürfen: nur formale, eindeutige Korrekturen (Inhalt bleibt unverändert).
+   Jede Änderung wird im Beitrag vermerkt („Automatisch angepasst“). */
+function polishPost(p, T = S) {
+  const b = T.studio.brand,
+    done = [];
+  const site = (b.website || "vivalink.me").toLowerCase();
+  let c = String(p.caption || "");
+  const c0 = c;
+  c = c.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (LOUD_EMOJI.test(c)) {
+    c = c.replace(new RegExp(LOUD_EMOJI.source, "gu"), "").replace(/ {2,}/g, " ");
+    done.push("laute Emojis entfernt");
+  }
+  let n = 0;
+  const before = c;
+  c = c.replace(/\p{Extended_Pictographic}\uFE0F?/gu, (m) => (++n > 2 ? "" : m)).replace(/ {2,}/g, " ");
+  if (c !== before) done.push("Emojis auf 2 begrenzt");
+  if (p.type !== "story" && c && !c.toLowerCase().includes(site) && !(b.signup && c.includes(b.signup))) {
+    const way = b.signup || "Mehr auf " + b.website;
+    c += "\n\n" + (/[.!?]$/.test(way) ? way : way + ".");
+    done.push("Anmelde-Hinweis ergänzt");
+  }
+  if (c !== c0 && !done.length) done.push("Leerzeilen bereinigt");
+  p.caption = c;
+  const tags = p.hashtags || [];
+  if (p.type !== "story" && !tags.some((t) => t.toLowerCase() === "#vivalink")) {
+    p.hashtags = ["#Vivalink", ...tags].slice(0, 8);
+    done.push("#Vivalink ergänzt");
+  }
+  if (done.length) p.polished = done;
+  checkPost(p, T);
+  return done;
+}
+/* Freigabebereit: Entwurf ohne Prüfhinweis, höchstens ein Stilhinweis, Termin heute oder später */
+const postReady = (p, t = today()) => p.status === "entwurf" && !p.demo && !(p.warnings || []).length && (p.hints || []).length <= 1 && (!p.date || p.date >= t);
 
 /* Kurzer Text zum Teilen: Caption + Hashtags */
 const postText = (p) => (p.caption || "").trim() + (p.hashtags && p.hashtags.length ? "\n\n" + p.hashtags.join(" ") : "");

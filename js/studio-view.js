@@ -54,6 +54,10 @@ ${miss.length ? `<div class="card rec warn">Markenprofil vervollständigen: ${mi
 ${monthOverview(ym, all)}
 <div class="chips">${Object.keys(FILTERS).map((k) => `<button class="${stFilter === k ? "on" : ""}" data-a="stFilter" data-id="${k}">${FILTERS[k]}</button>`).join("")}</div>
 <div class="card"><b>Monatsplan</b><div class="mut">${slots ? slots + " freie Termine" : "Alle Termine sind belegt"}${P.filter((p) => p.status !== "abgelehnt").length ? " (" + P.filter((p) => p.status !== "abgelehnt").length + " Beiträge geplant)" : ""} (${S.studio.settings.perWeek} pro Woche, ${S.studio.settings.days.map((d) => WD[d]).join("/")}, ${S.studio.settings.time} Uhr). Die KI schreibt alle Beiträge mit Captions, Hashtags und Folientexten; die App gestaltet die Grafiken.</div>
+${(() => {
+    const R = all.filter((p) => postReady(p) && p.date && p.date <= addDays(today(), 14));
+    return R.length ? `<div class="row" style="margin-top:8px"><button class="p" data-a="stApproveReady">Freigabebereite freigeben (${R.length})</button><span class="mut">ohne Prüfhinweise, nächste 14 Tage</span></div>` : "";
+  })()}
 <div class="row" style="margin-top:8px"><button class="p" data-a="stPrompt" ${slots ? "" : "disabled"}>${P.length ? "Freie Termine füllen" : "Monatsplan erstellen"}</button><button data-a="stNew">Einzelner Beitrag</button></div></div>
 ${Object.keys(weeks)
   .sort()
@@ -69,7 +73,7 @@ ${undated.length ? `<h2>Ohne Termin</h2>${undated.map(postCard).join("")}` : ""}
 <h2>Auswertung</h2><div class="card">${L.n ? `<div>${esc(L.summary)}</div><div class="mut">Annahme auf Basis von ${L.n} ausgewerteten Beiträgen. Der Monatsplan berücksichtigt die Reihenfolge automatisch.</div>` : '<div class="mut">Noch keine Ergebnisse. Trage nach der Veröffentlichung Reichweite und Interaktionen ein (Beitrag öffnen → Ergebnisse).</div>'}${unrated.length ? `<div class="mut" style="margin-top:6px">${unrated.length} veröffentlichte Beiträge ohne Ergebnisse.</div>` : ""}</div>`;
 }
 function postCard(p) {
-  return `<div class="card row" data-a="stOpen" data-id="${esc(p.id)}" style="align-items:flex-start;flex-wrap:nowrap"><div class="thumb" data-thumb="${esc(p.id)}"></div><div style="flex:1;min-width:0"><div class="row sp"><b>${p.date ? WD[new Date(p.date + "T12:00").getDay()] + " " + fmt(p.date) : "ohne Datum"}</b>${stChip(p)}</div><div class="mut">${esc(PTYPES[p.type] || p.type)} · ${esc(pillarName(p.pillar))}${p.source === "regel" ? " · automatisch erkannt" : ""}</div><div style="overflow:hidden;text-overflow:ellipsis">${postPrio(p) === 2 ? '<span class="chip st-wichtig">Wichtig</span> ' : ""}${esc(p.title)}</div>${p.warnings && p.warnings.length ? `<div class="mut" style="color:var(--warn)">⚠️ ${p.warnings.length} Prüfhinweis(e) – Einzelfreigabe nötig</div>` : ""}${p.hints && p.hints.length ? `<div class="mut">ℹ️ ${p.hints.length} Stilhinweis(e)</div>` : ""}</div></div>`;
+  return `<div class="card row" data-a="stOpen" data-id="${esc(p.id)}" style="align-items:flex-start;flex-wrap:nowrap"><div class="thumb" data-thumb="${esc(p.id)}"></div><div style="flex:1;min-width:0"><div class="row sp"><b>${p.date ? WD[new Date(p.date + "T12:00").getDay()] + " " + fmt(p.date) : "ohne Datum"}</b>${stChip(p)}</div><div class="mut">${esc(PTYPES[p.type] || p.type)} · ${esc(pillarName(p.pillar))}${p.source === "regel" ? " · automatisch erkannt" : ""}</div><div style="overflow:hidden;text-overflow:ellipsis">${postPrio(p) === 2 ? '<span class="chip st-wichtig">Wichtig</span> ' : ""}${postReady(p) ? '<span class="chip st-bereit">Freigabebereit</span> ' : ""}${esc(p.title)}</div>${p.warnings && p.warnings.length ? `<div class="mut" style="color:var(--warn)">⚠️ ${p.warnings.length} Prüfhinweis(e) – Einzelfreigabe nötig</div>` : ""}${p.hints && p.hints.length ? `<div class="mut">ℹ️ ${p.hints.length} Stilhinweis(e)</div>` : ""}</div></div>`;
 }
 /* Kleine Vorschaubilder nachträglich zeichnen */
 const THUMB = {};
@@ -128,7 +132,7 @@ async function postSheet(id, tab) {
 ${panel(
   "vorschau",
   `<div class="mut">${esc(PTYPES[p.type])} · ${esc(pillarName(p.pillar))}${p.kind ? " · " + esc(KINDS[p.kind] || p.kind) : ""} · ${p.date ? fmtLong(p.date) + ", " + esc(p.time) + " Uhr" : "ohne Datum"}${p.source === "regel" ? " · automatisch aus deinen Meetup-Daten erstellt" : p.source === "ki" ? " · von der KI geschrieben" : ""}</div>
-${p.warnings && p.warnings.length ? `<div class="card rec warn"><b>Prüfhinweise (bitte prüfen, vor Freigabe)</b>${p.warnings.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}${p.hints && p.hints.length ? `<div class="card rec"><b>Stilhinweise (optional)</b>${p.hints.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}<p class="mut" style="font-size:12px">Die Prüfung erkennt typische Probleme anhand deiner Daten. Aussagen, zu denen keine Daten vorliegen, kann sie nicht auf Wahrheit prüfen – deine Kontrolle bleibt nötig.</p>
+${p.polished && p.polished.length ? `<div class="mut" style="font-size:13px">Automatisch angepasst: ${esc(p.polished.join(", "))}</div>` : ""}${p.warnings && p.warnings.length ? `<div class="card rec warn"><b>Prüfhinweise (bitte prüfen, vor Freigabe)</b>${p.warnings.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}${p.hints && p.hints.length ? `<div class="card rec"><b>Stilhinweise (optional)</b>${p.hints.map((w) => `<div>• ${esc(w)}</div>`).join("")}</div>` : ""}<p class="mut" style="font-size:12px">Die Prüfung erkennt typische Probleme anhand deiner Daten. Aussagen, zu denen keine Daten vorliegen, kann sie nicht auf Wahrheit prüfen – deine Kontrolle bleibt nötig.</p>
 <div class="row" style="margin:8px 0"><button class="s ${story ? "" : "p"}" data-a="stView" data-id="feed">Feed</button><button class="s ${story ? "p" : ""}" data-a="stView" data-id="story">Story</button><label class="mut" style="margin-left:auto"><input type="checkbox" id="pe-guides" ${EDIT.guides ? "checked" : ""} style="width:auto;margin-right:4px">Schutzzonen</label></div>
 <div id="stPrev" class="prev"></div><div id="stPrevNote" class="mut"></div>
 <h2>Caption</h2><div class="card"><p style="margin:0;white-space:pre-wrap">${esc(postText(p))}</p></div>
@@ -417,6 +421,20 @@ async function studioAction(a, id, b) {
     await save();
     render();
     postSheet(q.id);
+  } else if (a === "stApproveReady") {
+    const R = livePosts().filter((x) => postReady(x) && x.date && x.date <= addDays(today(), 14));
+    if (window._sar !== R.length) {
+      window._sar = R.length;
+      return toast(`Nochmal tippen: ${R.length} Beiträge ohne Prüfhinweise freigeben`);
+    }
+    window._sar = null;
+    const r = await act("post.approve", "gruender", () => {
+      for (const x of R) approvePost(x);
+      return { ok: true, detail: R.length + " freigabebereite Beiträge (Sammelfreigabe)" };
+    });
+    await save();
+    render();
+    toast(R.length + " Beiträge freigegeben");
   } else if (a === "stApproveWeek") {
     const n = approveWeek(id);
     await save();

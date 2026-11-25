@@ -471,6 +471,7 @@ document.addEventListener("click", async (e) => {
     toast(r.made.length + " Aufgabe(n) angelegt");
   } else if (a === "sync" || a.startsWith("sy")) syncAction(a);
   else if (a === "auto" || a.startsWith("au")) autonomyAction(a, id);
+  else if (a === "kpi" || a.startsWith("kp")) kpiAction(a);
   else if (a === "msr") {
     const x = await act("measure.start", "gruender", () => startMeasure(id, Number(b.dataset.v)));
     if (!x || x.ok === false) return toast((x && x.error) || "Befund nicht mehr aktuell");
@@ -546,6 +547,7 @@ document.addEventListener("change", (e) => {
   await loadLog();
   await loadActions();
   await loadProposals();
+  await loadAutoState();
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   } catch (e) {}
@@ -612,6 +614,7 @@ document.addEventListener("change", (e) => {
     $("#app").innerHTML = '<h1>Vivalink Management AI</h1><div class="card rec bad">Die Ansicht konnte nicht angezeigt werden. Deine Daten sind gespeichert.</div><div class="row"><button class="p" data-a="snaps">Sicherungspunkt wiederherstellen</button><button data-a="diag">Diagnose</button></div>';
   }
   syncSoon(1500);
+  window.VL_READY = true; // Start vollständig abgeschlossen (für Tests und Diagnose)
   // Wieder geöffnet (App lag im Hintergrund): Zyklus höchstens alle 6 Stunden erneut
   document.addEventListener("visibilitychange", async () => {
     if (document.visibilityState !== "visible") return;
