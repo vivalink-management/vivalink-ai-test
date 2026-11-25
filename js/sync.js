@@ -268,7 +268,7 @@ async function pairApprove(t = null) {
   if (!PAIR || PAIR.role !== "A" || !PAIR.pubB) return { ok: false, error: "Keine Kopplung offen" };
   const cfg = await syncCfg();
   const K = await pairKey(PAIR.kp.privateKey, PAIR.pubB, PAIR.slot);
-  const bundle = await seal(K, { format: "vivalink-pair", vid: cfg.vid, token: cfg.token, mk: cfg.mk, kv: cfg.kv, rid: cfg.rid, rtok: cfg.rtok });
+  const bundle = await seal(K, { format: "vivalink-pair", vid: cfg.vid, token: cfg.token, mk: cfg.mk, kv: cfg.kv, rid: cfg.rid, rtok: cfg.rtok, recoveryAt: cfg.recoveryAt || null });
   const r = await transport(t).pair.bundle(PAIR.slot, PAIR.own, bundle);
   PAIR = null;
   if (r.status !== 200) return { ok: false, error: "Übergabe fehlgeschlagen – bitte neu starten" };
@@ -309,10 +309,50 @@ async function pairCheckB(t = null) {
   }
   PAIR = null;
   if (!o || o.format !== "vivalink-pair" || !o.mk) return { state: "error", error: "Unbekanntes Format" };
-  await saveCfg({ ...newVaultCfg(o.kv), vid: o.vid, token: o.token, mk: o.mk, rid: o.rid || "", rtok: o.rtok || "" });
+  const next = { ...newVaultCfg(o.kv), vid: o.vid, token: o.token, mk: o.mk, rid: o.rid || "", rtok: o.rtok || "", recoveryAt: o.recoveryAt || null };
+  const prev = await syncCfg();
+  if (prev && !prev.revoked) return mergeVaults(prev, next, T);
+  await saveCfg(next);
   logAction("sync.pair", "gruender", true, "Dieses Gerät gekoppelt");
   const s = await syncOnce(T);
   return { state: "done", ...s };
+}
+/* Zusammenführen: Dieses Gerät hatte einen EIGENEN Tresor (z. B. beide Geräte haben „Synchronisierung einrichten“
+   gewählt) und tritt nun dem Tresor des anderen Geräts bei. Ablauf mit mehrfacher Absicherung:
+   1. letzter Stand des eigenen Tresors holen (falls ein weiteres Gerät daran hing) – scheitert das, wird nichts verändert
+   2. Sicherungspunkt des Gerätezustands (zusätzlich zu den Rückgängig-Punkten jeder Übernahme)
+   3. dem anderen Tresor beitreten: dessen Daten werden mit den eigenen zusammengeführt (nur Hinzufügen/Aktualisieren,
+      nie Löschen; gleichzeitige Änderungen werden als Konflikt mit beiden Fassungen festgehalten) und hochgeladen
+   4. erst nach Erfolg: alter Tresor und beide bisherigen Wiederherstellungsschlüssel gesperrt, ein neuer Schlüssel erzeugt
+   Scheitert Schritt 3, bleibt die bisherige Kopplung unverändert aktiv. */
+async function mergeVaults(prev, next, T) {
+  if (prev.vid === next.vid) {
+    const s = await syncOnce(T);
+    return { state: "done", ...s, detail: "Beide Geräte nutzen bereits denselben Datenspeicher" };
+  }
+  const pre = await syncOnce(T);
+  if (!pre.ok) return { state: "error", error: "Eigener Datenspeicher nicht erreichbar – nichts verändert (" + pre.error + ")" };
+  await autoSnapshot(true);
+  if (!(await makeUndoPoint("Vor dem Zusammenführen der Geräte"))) return { state: "error", error: "Rückgängig-Punkt nicht möglich – nichts verändert" };
+  const before = { tasks: S.tasks.length, memory: S.memory.length, posts: (S.studio.posts || []).length, values: S.metrics.reduce((n, m) => n + m.entries.length, 0) };
+  await kvPut("sync-prev", { ...prev, at: Date.now() });
+  await saveCfg(next);
+  const s = await syncOnce(T);
+  const after = { tasks: S.tasks.length, memory: S.memory.length, posts: (S.studio.posts || []).length, values: S.metrics.reduce((n, m) => n + m.entries.length, 0) };
+  const lost = Object.keys(before).filter((k) => after[k] < before[k]);
+  if (!s.ok || lost.length) {
+    // Rücknahme: bisherige Kopplung wieder aktiv; zusammengeführte Daten bleiben lokal (nichts gelöscht), Rückgängig-Punkt vorhanden
+    await saveCfg(prev);
+    await kvPut("sync-prev", null);
+    logEvent("error", "sync.merge", s.ok ? "Weniger Einträge nach dem Zusammenführen: " + lost.join(", ") : s.error);
+    return { state: "error", error: "Zusammenführen nicht abgeschlossen – bisherige Synchronisierung bleibt aktiv" + (s.ok ? "" : " (" + s.error + ")") };
+  }
+  await T.revoke({ id: prev.vid, token: prev.token }).catch(() => {});
+  if (prev.rid) await T.revoke({ id: prev.rid, token: prev.rtok }).catch(() => {});
+  const recovery = await writeRecovery(T).catch(() => null);
+  await kvPut("sync-prev", null);
+  logAction("sync.merge", "gruender", true, `Geräte zusammengeführt: ${s.pulled} übernommen, ${s.conflicts} Konflikte`);
+  return { state: "done", ...s, merged: true, before, after, recovery, detail: "Geräte zusammengeführt" };
 }
 
 /* ---------- Ein Synchronisierungsdurchlauf: holen → entschlüsseln → zusammenführen → verschlüsseln → schreiben ---------- */
@@ -433,6 +473,7 @@ ${
     ? `<div class="card"><div>Status: <b>${cfg.revoked ? "gesperrt – neu koppeln" : SYNC.error ? "Fehler" : "gekoppelt"}</b></div><div class="mut">Letzte Synchronisierung: ${cfg.last ? new Date(cfg.last).toLocaleString("de-DE") : "noch keine"}${SYNC.error ? " · " + esc(SYNC.error) : ""}</div>${devs.length ? `<div class="mut" style="margin-top:4px">Geräte: ${devs.map(([id, d]) => `${esc(d.name)}${id === S.dev ? " (dieses)" : ""} · ${new Date(d.at).toLocaleDateString("de-DE")}`).join(" · ")}</div>` : ""}<div class="mut">Wiederherstellungsschlüssel: ${cfg.recoveryAt ? "erstellt am " + new Date(cfg.recoveryAt).toLocaleDateString("de-DE") : "fehlt"}</div></div>
 <div class="row"><button class="p" data-a="syNow">Jetzt synchronisieren</button><button data-a="syAdd">Weiteres Gerät koppeln</button></div>
 <div id="syPair"></div>
+${devs.length < 2 && !cfg.revoked ? `<div class="card rec warn" id="syMergeCard"><b>Nur dieses Gerät ist verbunden</b><p>Hat dein anderes Gerät eine <b>eigene</b> Synchronisierung eingerichtet? Dann hier zusammenführen – es geht nichts verloren, beide Datenstände werden vereint:</p><ol style="margin:4px 0 8px 18px;padding:0"><li>Auf dem <b>anderen</b> Gerät: „Mehr › Synchronisierung › Weiteres Gerät koppeln“.</li><li>Den Code hier eingeben und „Zusammenführen“ tippen.</li><li>Prüfzahl vergleichen und auf dem anderen Gerät bestätigen.</li></ol><input id="syMergeIn" placeholder="XXXX-XXXX" autocapitalize="characters" autocomplete="off"><button data-a="syMerge">Zusammenführen</button></div>` : ""}
 <h2>Sicherheit</h2><div class="row"><button data-a="syRecNew">Neuen Wiederherstellungsschlüssel</button><button data-a="syRotate">Gerät verloren: Schlüssel erneuern</button><button data-a="syOff">Kopplung auf diesem Gerät entfernen</button></div><p class="mut" style="font-size:12px">„Schlüssel erneuern“ sperrt den bisherigen Tresor. Ein verlorenes Gerät erhält danach keine neuen Daten mehr; deine anderen Geräte koppelst du einmal neu.</p><button data-a="close">Schließen</button>`
     : `<div class="card"><b>Erstes Gerät</b><p class="mut">Legt einen neuen, verschlüsselten Tresor an und zeigt einmalig deinen Wiederherstellungsschlüssel.</p><button class="p" data-a="syNew">Synchronisierung einrichten</button></div>
 <div class="card"><b>Weiteres Gerät</b><p class="mut">Auf dem bereits gekoppelten Gerät „Weiteres Gerät koppeln“ tippen und den 8-stelligen Code hier eingeben. Danach vergleichst du eine Prüfzahl auf beiden Geräten.</p><input id="syIn" placeholder="XXXX-XXXX" autocapitalize="characters" autocomplete="off"><button data-a="syJoin">Verbinden</button><div id="syPair"></div></div>
@@ -494,6 +535,7 @@ async function syncAction(a) {
   if (a === "syPairOk") {
     const r = await act("sync.pair", "gruender", () => pairApprove());
     toast(r.ok ? "Gerät gekoppelt" : r.error);
+    if (r.ok) [15000, 45000].forEach((ms) => setTimeout(() => syncOnce().then((x) => x.ok && (x.pulled || x.conflicts) && render()), ms)); // Daten des anderen Geräts abholen
     return syncSheet();
   }
   if (a === "syPairCancel") {
@@ -501,8 +543,8 @@ async function syncAction(a) {
     await pairCancel();
     return syncSheet();
   }
-  if (a === "syJoin") {
-    const r = await pairJoin(val("syIn"));
+  if (a === "syJoin" || a === "syMerge") {
+    const r = await pairJoin(val(a === "syMerge" ? "syMergeIn" : "syIn"));
     if (!r.ok) return toast(r.error);
     pairBox(`<div class="card rec warn"><b>Prüfzahl</b><div style="font-size:30px;font-weight:800;margin:6px 0" id="sySas">${esc(r.sas)}</div><div class="mut">Vergleiche sie mit der Zahl auf dem anderen Gerät und bestätige dort. Warte auf Bestätigung …</div></div>`);
     pairTimer = setInterval(async () => {
@@ -511,9 +553,9 @@ async function syncAction(a) {
       if (s.state === "waiting") return;
       stopPairPoll();
       if (s.state === "done") {
-        toast(syncMsg(s));
+        toast(s.merged ? `Zusammengeführt: ${s.pulled} Einträge übernommen` + (s.conflicts ? `, ${s.conflicts} Konflikt(e) zur Prüfung` : "") : syncMsg(s));
         render();
-        syncSheet();
+        syncSheet(s.merged ? `<div class="card" id="syMerged"><b>Beide Geräte nutzen jetzt denselben Datenspeicher.</b> Das andere Gerät übernimmt die vereinten Daten beim nächsten Öffnen automatisch. Der bisherige zweite Speicher wurde gesperrt.</div>` + (s.recovery ? recoveryHtml(s.recovery) + '<p class="mut">Dieser neue Wiederherstellungsschlüssel ersetzt <b>beide</b> bisherigen.</p>' : "") : "");
       } else pairBox(`<div class="card rec bad">${esc(s.error || "Kopplung abgebrochen oder abgelaufen")}</div>`);
     }, 2000);
     return;
