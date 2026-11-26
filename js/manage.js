@@ -272,6 +272,7 @@ function weeklyReport(T = S, end = today()) {
     "",
     "KENNZAHLEN – TREND ÜBER 4 WOCHEN",
     trends.length ? trends.map((x) => `- ${x.m.name}: ${x.t.dir} (${num(x.t.first.value)} → ${num(x.t.last.value)}, ${x.t.n} Werte)`).join("\n") : "- zu wenige Werte für einen Trend (mindestens 3 in 4 Wochen)",
+    typeof KPI_STATE !== "undefined" && KPI_STATE && KPI_STATE.meta && !KPI_STATE.meta.excludesTestAccounts ? "- Hinweis: Werte aus der Verwaltung ohne Admin-Konten; ob weitere Testkonten enthalten sind, ist nicht bekannt (Abweichungen zum Admin-Dashboard möglich)." : null,
     "",
     "PRIORISIERTE EMPFEHLUNGEN",
     F.length ? F.map((f, i) => `${i + 1}. ${f.title} → ${f.measures[0] ? f.measures[0].t + " (Priorität " + f.measures[0].prio + ", Risiko: " + measureRisk(f.measures[0]) + ")" : f.action}`).join("\n") : "- kein dringender Handlungsbedarf erkannt",

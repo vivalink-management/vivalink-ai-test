@@ -109,7 +109,7 @@ async function kpiSync() {
     const m = S.metrics.find((y) => y.key === x.key);
     if (m && addVal(m.id, { date: x.date, value: Math.round(x.value * 100) / 100, status: "confirmed", src: "verwaltung" })) n++;
   }
-  Object.assign(cfg, { last: Date.now(), fails: 0, lastError: null, count: v.values.length });
+  Object.assign(cfg, { last: Date.now(), fails: 0, lastError: null, count: v.values.length, meta: j.meta ? { excludesTestAccounts: j.meta.excludesTestAccounts === true, excludesDemoMeetups: j.meta.excludesDemoMeetups === true } : null });
   await kvPut("kpi-config", cfg);
   await loadKpiState();
   await save();
@@ -197,7 +197,7 @@ async function kpiSheet() {
     !kpiUrl()
       ? '<div class="card rec warn">Vorbereitet. Die Gegenstelle in der Verwaltung (Supabase) ist noch nicht eingerichtet – das braucht deine gesonderte Freigabe (Anleitung: docs/AUFTRAG-VERWALTUNG.md). Bis dahin trägst du Kennzahlen auf der Startseite ein.</div>'
       : cfg && !cfg.revoked
-        ? `<div class="card"><div>Status: <b>${cfg.lastError ? "Problem beim Abruf" : "gekoppelt"}</b></div><div class="mut">Zuletzt abgerufen: ${cfg.last ? new Date(cfg.last).toLocaleString("de-DE") : "noch nie"} · übernommene Werte: ${fromV}</div>${cfg.lastError ? `<div class="mut">Letzter Fehler (${new Date(cfg.lastError.at).toLocaleString("de-DE")}): ${esc(cfg.lastError.msg)} – neuer Versuch automatisch.</div>` : ""}<div class="mut">Abruf automatisch höchstens alle 6 Stunden beim Öffnen der App.</div></div><div class="row"><button class="p" data-a="kpNow">Jetzt abrufen</button><button data-a="kpOff">Kopplung entfernen</button></div>`
+        ? `<div class="card"><div>Status: <b>${cfg.lastError ? "Problem beim Abruf" : "gekoppelt"}</b></div><div class="mut">Zuletzt abgerufen: ${cfg.last ? new Date(cfg.last).toLocaleString("de-DE") : "noch nie"} · übernommene Werte: ${fromV}</div>${cfg.lastError ? `<div class="mut">Letzter Fehler (${new Date(cfg.lastError.at).toLocaleString("de-DE")}): ${esc(cfg.lastError.msg)} – neuer Versuch automatisch.</div>` : ""}<div class="mut">Abruf automatisch höchstens alle 6 Stunden beim Öffnen der App.</div>${cfg.meta && !cfg.meta.excludesTestAccounts ? '<div class="mut" id="kpTest" style="margin-top:4px">Hinweis: Admin-Konten sind ausgeschlossen. Ob weitere Testkonten mitgezählt werden, ist nicht bekannt – leichte Abweichungen zum Admin-Dashboard sind möglich.</div>' : ""}</div><div class="row"><button class="p" data-a="kpNow">Jetzt abrufen</button><button data-a="kpOff">Kopplung entfernen</button></div>`
         : `${cfg && cfg.revoked ? '<div class="card rec warn" id="kpRevoked">Der Zugang wurde in der Verwaltung widerrufen. Bisherige Kennzahlen bleiben erhalten. Für neue Werte einen neuen Kopplungscode erzeugen und hier eingeben.</div>' : ""}<div class="card"><b>Mit der Verwaltung koppeln</b><p class="mut">In der Verwaltung unter „Management AI“ einen Kopplungscode erzeugen (6–8 Ziffern, 10 Minuten gültig) und hier eingeben.</p><input id="kpCode" inputmode="numeric" autocomplete="off" placeholder="Kopplungscode"><button class="p" data-a="kpPair">Koppeln</button></div>`
   }<button data-a="close">Schließen</button>`);
 }
