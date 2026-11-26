@@ -117,6 +117,34 @@ function meetupCoverage(T = S) {
   return { announce: L.some((p) => p.auto === "ankuendigung" || diff(p) >= 4), remind: L.some((p) => p.auto === "erinnerung" || (diff(p) >= 0 && diff(p) <= 3)), recap };
 }
 
+/* ---------- Inhaltlicher Schwerpunkt aus den aktuellen Kennzahlen (ohne Zahlen zu veröffentlichen) ----------
+   Verbindet Analyse und Marketing: die wöchentlichen Entwürfe richten sich nach dem, was gerade am meisten hilft. */
+function contentFocus(T = S) {
+  const out = [];
+  const val = (k) => {
+    const m = T.metrics.find((x) => x.key === k),
+      c = m && cur(m);
+    return c && ago(c.date) <= 10 ? c.value : null;
+  };
+  const u = T.meetup,
+    days = u && u.date ? Math.round((new Date(u.date + "T12:00") - new Date(today() + "T12:00")) / 864e5) : null,
+    goal = u && Number(u.goal) > 0 ? Number(u.goal) : null,
+    su = val("signups");
+  if (days != null && days >= 0 && days <= 14 && goal && su != null && su < goal * (days <= 7 ? 0.75 : 0.5))
+    out.push("Das nächste Meetup braucht noch Anmeldungen: Ankündigung und Erinnerung in den Vordergrund, Vorfreude und niedrige Hürde betonen (keine Teilnehmerzahlen nennen).");
+  else if (days != null && days >= 0 && days <= 14 && goal && su != null && su >= goal)
+    out.push("Das nächste Meetup ist gut gefüllt: nicht weiter dafür werben; stattdessen auf künftige Termine und die Anmeldung allgemein hinweisen.");
+  const reg = val("reg_total"),
+    act = val("active_users");
+  if (reg && act != null && reg >= 30 && act / reg < 0.3) out.push("Viele Registrierte sind länger nicht aktiv: Beiträge, die den Einstieg ins erste Meetup leicht machen (Ablauf, was einen erwartet).");
+  const m7 = T.metrics.find((x) => x.key === "reg_week"),
+    tr = m7 && typeof metricTrend === "function" ? metricTrend(m7, today()) : null;
+  if (tr && tr.dir === "fallend") out.push("Neue Registrierungen gehen zurück: Vivalink und das Konzept für Neue verständlich vorstellen, mit klarer Anmeldung.");
+  const ns = val("noshow");
+  if (ns != null && su && ns / su >= 0.25) out.push("Viele Absagen: Verbindlichkeit fördern – Erinnerung und „Darauf kannst du dich freuen“ kurz vor dem Termin.");
+  return out.slice(0, 3);
+}
+
 /* ---------- Planung: Termine und Themenverteilung ---------- */
 function planSlots(ym, T = S, angleUse = {}) {
   const st = T.studio,
@@ -234,7 +262,10 @@ SO KLINGT ES GUT
 - 5–8 passende deutsche Hashtags ohne Leerzeichen${b.hashtags ? ", immer dabei: " + b.hashtags : ""}; nicht in jedem Beitrag dieselben.
 - Interne Fakten (Typ „intern“) nur sinngemäß und nur, wenn sie für die Öffentlichkeit geeignet sind.
 
-FAKTEN
+${(() => {
+    const cf = contentFocus(T);
+    return cf.length ? "SCHWERPUNKT (aus den aktuellen Kennzahlen abgeleitet; Zahlen daraus NICHT in Beiträgen nennen)\n" + cf.map((x) => "- " + x).join("\n") + "\n\n" : "";
+  })()}FAKTEN
 ${F.map((f) => `${f.id} (${f.kind}): ${f.text}`).join("\n")}
 
 TERMINE (je ein Beitrag)

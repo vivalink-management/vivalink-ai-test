@@ -1,5 +1,30 @@
 /* Schritt 2: Regelmotor (feste Regeln, keine KI). kind=fakt: direkt aus deinen Daten. kind=annahme: Richtwert. */
 let showAll = false;
+/* Verwaltung angebunden und Zugang gültig? (Kennzahlen kommen dann automatisch) */
+const KPI_ON = () => typeof KPI_STATE !== "undefined" && !!KPI_STATE && !KPI_STATE.revoked;
+/* Strategische Empfehlungen aus Verhältnissen echter Kennzahlen (nur wenn beide Werte aktuell sind, ≤ 10 Tage).
+   Schwellen sind Annahmen und als solche gekennzeichnet; Geschäftsentscheidungen bleiben beim Gründer. */
+function ratioFindings(add) {
+  const val = (k) => {
+    const m = S.metrics.find((x) => x.key === k),
+      c = m && cur(m);
+    return c && ago(c.date) <= 10 ? c : null;
+  };
+  const q = (a, b) => (a && b && b.value > 0 ? a.value / b.value : null);
+  const pct = (x) => Math.round(x * 100) + " %";
+  const ns = q(val("noshow"), val("signups"));
+  if (ns != null && ns >= 0.25)
+    add("q-noshow", "metric", 2, "annahme", `Hohe Absagequote: ${pct(ns)} der Anmeldungen`, "Bestätigung 48 Stunden vorher und eine Erinnerung am Vortag einplanen; Absagegründe beim nächsten Meetup erfragen.", [`Absagen ${num(val("noshow").value)}, Anmeldungen ${num(val("signups").value)}.`, "Richtwert (Annahme): unter 25 %.", "Das Muster ist belegt, der Grund ist unbekannt."], "ai");
+  const rf = q(val("refunds"), val("payments"));
+  if (rf != null && rf >= 0.15)
+    add("q-refund", "metric", 2, "annahme", `Erstattungen bei ${pct(rf)} der Zahlungen (30 Tage)`, "Gründe der Erstattungen prüfen. Eine Änderung der Storno- oder Preisregeln ist deine Entscheidung.", [`Erstattungen ${num(val("refunds").value)} €, Zahlungen ${num(val("payments").value)} €.`, "Richtwert (Annahme): unter 15 %."], "ai");
+  const ac = q(val("active_users"), val("reg_total"));
+  if (ac != null && ac < 0.3 && val("reg_total").value >= 30)
+    add("q-active", "metric", 1, "annahme", `Nur ${pct(ac)} der Registrierten in den letzten 30 Tagen aktiv`, "Reaktivierung planen: Instagram-Beitrag zum nächsten Meetup und eine Einladungsrunde an länger inaktive Mitglieder.", [`Aktiv ${num(val("active_users").value)} von ${num(val("reg_total").value)}.`, "Richtwert (Annahme): mindestens 30 %."], "studio");
+  const ir = val("invite_rate");
+  if (ir && ir.value < 20)
+    add("q-invite", "metric", 1, "annahme", `Annahmequote der Einladungen niedrig (${num(ir.value)} %)`, "Einladungstext, Zeitpunkt und Zielgruppe prüfen; eine Variante testen und in zwei Wochen vergleichen.", ["Richtwert (Annahme): mindestens 20 %."], "ai");
+}
 function findings() {
   const F = [],
     t = today(),
@@ -118,17 +143,22 @@ function findings() {
     );
   const oo = [],
     nv = [];
+  // Kennzahlen, die automatisch aus der Verwaltung kommen (Wert in den letzten 3 Tagen): keine Eingabe-Hinweise
+  const used = S.metrics.filter((m) => m.entries.some((e) => !e.deleted && e.status !== "old")).length;
+  const autoFed = (m) => !!(KPI_ON() && m.entries.some((e) => !e.deleted && e.src === "verwaltung" && ago(e.date) <= 3));
   for (const m of S.metrics) {
     const c = cur(m),
       o = oldE(m),
       v = valid(m);
+    if (!c && KPI_ON() && m.entries.some((e) => !e.deleted && e.src === "verwaltung")) continue; // Verwaltung liefert, nur kurz leer
     if (!c) {
       if (o) oo.push(`${m.name}: nur früherer Stand (${num(o.value)}, ca.)`);
+      else if (!m.entries.some((e) => !e.deleted) && m.goal === "" && used >= 3) continue; // nie genutzt, kein Ziel: nicht dauernd nachfragen
       else nv.push(m.name);
       continue;
     }
     const d = ago(c.date);
-    if (d > 14)
+    if (d > 14 && !autoFed(m))
       add(
         "m-st-" + m.key,
         "metric",
@@ -210,6 +240,7 @@ function findings() {
       nv.slice(0, 6),
       null,
     );
+  ratioFindings(add);
   const u = S.meetup,
     su = S.metrics.find((x) => x.key === "signups"),
     sc = su && cur(su);

@@ -292,7 +292,8 @@ async function reportSheet() {
 }
 
 /* ---------- Selbstreparatur Stufe 1 (mit Rückgängig-Punkt und Protokoll) ---------- */
-/* Nur eindeutige, verlustfreie Korrekturen: verwaiste Verweise und ungültige Fristen. */
+/* Nur eindeutige, verlustfreie Korrekturen: verwaiste Verweise, ungültige Fristen, exakt doppelte Kennzahl-Einträge
+   (als gelöscht markiert, nicht entfernt) und Konflikte zu gelöschten Einträgen. */
 function findRepairs(T = S) {
   const R = [];
   const tid = new Set(T.tasks.filter((x) => !x.deleted).map((x) => x.id));
@@ -303,6 +304,24 @@ function findRepairs(T = S) {
     if (x.measure && x.measure.postId && !pid.has(x.measure.postId)) R.push({ msg: "Maßnahme: Verweis auf gelöschten Beitrag entfernt", fix: () => ((x.measure.postId = null), touch(x)) });
   }
   if (T.studio) for (const p of T.studio.posts) if (p.measureTask && !tid.has(p.measureTask)) R.push({ msg: "Beitrag: Verweis auf gelöschte Maßnahme entfernt", fix: () => ((p.measureTask = null), touch(p)) });
+  // Exakt doppelte Kennzahl-Einträge (gleiches Datum, Quelle, Wert, Status): der jüngere wird als gelöscht markiert (bleibt erhalten)
+  for (const m of T.metrics) {
+    const seen = new Map();
+    for (const e of m.entries.filter((x) => !x.deleted && x.date).sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0) || String(a.id).localeCompare(String(b.id)))) {
+      const k = [e.date, e.src, e.value, e.status].join("|");
+      if (seen.has(k)) R.push({ msg: m.name + ": doppelter Eintrag vom " + fmt(e.date) + " zusammengeführt", fix: () => ((e.deleted = true), touch(e)) });
+      else seen.set(k, e);
+    }
+  }
+  // Konflikte, deren Eintrag es nicht mehr gibt (z. B. gelöscht): als erledigt markieren
+  const exists = (c) => {
+    if (c.kind === "fork") return T.memory.some((m) => m.id === c.ref);
+    if (c.coll === "tasks") return T.tasks.some((x) => x.id === c.ref && !x.deleted);
+    if (c.coll === "posts") return !T.studio || T.studio.posts.some((x) => x.id === c.ref && !x.deleted);
+    if (c.coll === "memory") return T.memory.some((x) => x.id === c.ref);
+    return true;
+  };
+  for (const c of T.conflicts || []) if (!c.resolved && c.ref && !exists(c)) R.push({ msg: "Konflikt zu einem gelöschten Eintrag geschlossen", fix: () => ((c.resolved = true), (c.resolvedAt = Date.now()), (c.auto = "Eintrag gelöscht")) });
   return R;
 }
 async function autoRepair(T = S) {
