@@ -12,6 +12,23 @@ const SYNC_FORMAT = "vivalink-sync";
 const B32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // ohne leicht verwechselbare Zeichen
 const syncUrl = () => window.VL_SYNC_URL || ""; // wird erst nach Freigabe gesetzt (js/config.js)
 let SYNC = { busy: false, last: null, error: null };
+/* Zustand für Befunde (synchron lesbar im Regelmotor): Kopplung, letzter Erfolg, letzter Fehler, Geräte */
+let SYNC_STATE = null;
+const loadSyncState = async () => {
+  const c = syncUrl() ? await kvGet("sync-config") : null;
+  SYNC_STATE = c && c.mk ? { revoked: !!c.revoked, last: c.last || null, since: c.since || null, devices: Object.keys(c.devices || {}).length, error: SYNC.error, errorAt: SYNC.errorAt || null } : null;
+  return SYNC_STATE;
+};
+/* Befund, wenn die Synchronisierung gestört ist (nur wenn eingerichtet) */
+function syncFinding(now = Date.now()) {
+  const c = SYNC_STATE;
+  if (!c) return null;
+  if (c.revoked) return { sev: 2, title: "Synchronisierung gesperrt – dieses Gerät neu koppeln", detail: "Der Schlüssel wurde auf einem anderen Gerät erneuert. Unter „Mehr › Synchronisierung“ neu koppeln; die Daten auf diesem Gerät bleiben erhalten." };
+  const days = c.last ? Math.floor((now - c.last) / 864e5) : null;
+  if (c.error && (days == null || days >= 2)) return { sev: 2, title: "Synchronisierung funktioniert seit " + (days == null ? "der Einrichtung" : days + " Tagen") + " nicht", detail: "Letzter Fehler: " + c.error + ". Die App versucht es automatisch weiter; Daten bleiben auf diesem Gerät erhalten." };
+  if (c.devices < 2 && c.last && now - (c.since || c.last) > 3 * 864e5) return { sev: 1, title: "Nur dieses Gerät ist mit der Synchronisierung verbunden", detail: "Falls dein anderes Gerät eine eigene Synchronisierung hat: „Mehr › Synchronisierung › Zusammenführen“." };
+  return null;
+}
 
 /* ---------- Hilfen ---------- */
 const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
@@ -46,6 +63,7 @@ async function hkdfKey(raw, salt, info) {
   return crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode(salt), info: new TextEncoder().encode(info) }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 function newVaultCfg(kv = 1) {
+  // since: Zeitpunkt der Einrichtung auf diesem Gerät
   return { vid: hexOfBytes(rnd(16)), token: hexOfBytes(rnd(32)), mk: b64(rnd(32)), kv, since: Date.now(), last: null, version: 0, devices: {}, rid: "", rtok: "", recoveryAt: 0 };
 }
 /* Zugang zum Tresor: Adresse, Token, Datenschlüssel (aus dem Zufallsschlüssel, an Tresor und Schlüsselversion gebunden) */
@@ -437,6 +455,8 @@ async function syncOnce(t = null) {
     return { ok: false, error: e.message, ...rep };
   } finally {
     SYNC.busy = false;
+    if (SYNC.error) SYNC.errorAt = Date.now();
+    await loadSyncState().catch(() => {});
   }
 }
 /* Automatisch: beim Start und kurz nach Änderungen (nur wenn eingerichtet und online) */
