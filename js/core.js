@@ -1,5 +1,5 @@
 /* Grundlagen: Konstanten, Hilfsfunktionen, Speicher, technisches Protokoll */
-const APP_VERSION = "2.7.1";
+const APP_VERSION = "2.8.0";
 const IS_TEST = window.VL_CHANNEL === "test";
 const SCHEMA = 4; // Datenversion: 1 = GitHub-Version, 2 = Artefakt (Kennzahlen), 3 = Konflikterkennung, 4 = Instagram-Studio
 const CATS = [

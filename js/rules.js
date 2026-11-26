@@ -338,6 +338,8 @@ function findings() {
   // Anbindung der Verwaltung gestört (nur wenn eingerichtet)
   const kf = typeof kpiFinding === "function" ? kpiFinding() : null;
   if (kf) add("sys-kpi", "system", 2, "fakt", kf.title, kf.detail, ["Mehr › Verwaltung"], "more");
+  const md = typeof kpiMeetupFinding === "function" ? kpiMeetupFinding() : null;
+  if (md) add("mt-verw", "meetup", 2, "fakt", md.title, md.detail, ["Quelle: Kennzahlen aus der Verwaltung"], null);
   const sg = S.suggest || {},
     hasT = (id) => S.tasks.some((x) => !x.done && x.fid === id);
   return F.filter((f) => {

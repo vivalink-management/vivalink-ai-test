@@ -8,6 +8,7 @@ const kpiUrl = () => window.VL_KPI_URL || "";
 const KPI_TOP = ["format", "version", "generatedAt", "values", "meta"];
 const KPI_VAL = ["key", "date", "value", "source"];
 const KPI_META = ["excludesTestAccounts", "excludesDemoMeetups", "timezone"];
+const KPI_MEETUP = ["meetup_days", "meetup_capacity"]; // keine Kennzahl-Karten, sondern Angaben zum nächsten Meetup
 const PII_RE = /@|\+?\d[\d ()/-]{7,}\d|\b(name|email|telefon|phone|vorname|nachname|adresse|address|user_?id|uid)\b/i;
 
 /* Prüft eine Antwort der Verwaltung, ohne etwas zu speichern. */
@@ -17,7 +18,7 @@ function validateKpis(j) {
   if (extra.length) return { ok: false, error: "Unerwartete Felder (" + extra.slice(0, 3).join(", ") + ") – aus Datenschutzgründen nichts übernommen" };
   if (j.format !== KPI_FORMAT || j.version !== 1 || !Array.isArray(j.values)) return { ok: false, error: "Unbekanntes Format – nichts übernommen" };
   if (j.meta && (typeof j.meta !== "object" || Object.keys(j.meta).some((k) => !KPI_META.includes(k)))) return { ok: false, error: "Unerwartete Zusatzangaben – nichts übernommen" };
-  const known = new Set(MT.map((t) => t.k));
+  const known = new Set([...MT.map((t) => t.k), ...KPI_MEETUP]);
   const vals = [];
   for (const v of j.values) {
     if (!v || typeof v !== "object" || Object.keys(v).some((k) => !KPI_VAL.includes(k))) return { ok: false, error: "Unerwartete Felder in einem Wert – aus Datenschutzgründen nichts übernommen" };
@@ -31,8 +32,14 @@ function validateKpis(j) {
 }
 const kpiCfg = async () => (await kvGet("kpi-config")) || null;
 /* Zustand für Befunde (synchron lesbar im Regelmotor), aktualisiert beim Start und nach jedem Abruf */
-let KPI_STATE = null;
-const loadKpiState = async () => (KPI_STATE = kpiUrl() ? await kpiCfg() : null);
+let KPI_STATE = null,
+  KPI_MEETUP_DIFF = null;
+const loadKpiState = async () => {
+  KPI_STATE = kpiUrl() ? await kpiCfg() : null;
+  const a = KPI_STATE ? await kvGet("meetup-auto") : null;
+  KPI_MEETUP_DIFF = a && a.diff ? a.diff : null;
+  return KPI_STATE;
+};
 const KPI_TIMEOUT = 15000;
 async function kpiFetch(path, opt = {}) {
   const ac = typeof AbortController === "function" ? new AbortController() : null;
@@ -96,7 +103,9 @@ async function kpiSync() {
     return kpiFail(cfg, v.error);
   }
   let n = 0;
+  const mu = await kpiMeetup(v.values);
   for (const x of v.values) {
+    if (KPI_MEETUP.includes(x.key)) continue;
     const m = S.metrics.find((y) => y.key === x.key);
     if (m && addVal(m.id, { date: x.date, value: Math.round(x.value * 100) / 100, status: "confirmed", src: "verwaltung" })) n++;
   }
@@ -106,7 +115,49 @@ async function kpiSync() {
   await save();
   logEvent("info", "kpi.ok", n + " Werte neu oder geändert");
   logAction("kpi.fetch", "auto", true, v.values.length + " Werte, " + n + " neu oder geändert");
-  return { ok: true, n, total: v.values.length, ignored: v.ignored };
+  return { ok: true, n, total: v.values.length, ignored: v.ignored, meetup: mu };
+}
+/* Nächstes Meetup aus der Verwaltung: Datum (aus „Tage bis“) und Ziel (= Plätze) automatisch eintragen.
+   Eigene Eingaben haben Vorrang: Überschrieben wird nur, was leer, vorbei oder zuletzt automatisch gesetzt war.
+   Weicht ein selbst eingetragenes Datum ab, entsteht ein Hinweis statt einer Änderung. */
+async function kpiMeetup(values) {
+  const latest = (k) => values.filter((x) => x.key === k).sort((a, b) => b.date.localeCompare(a.date))[0];
+  const d = latest("meetup_days"),
+    c = latest("meetup_capacity");
+  const prev = (await kvGet("meetup-auto")) || null;
+  if (!d || !Number.isInteger(d.value) || d.value < 0 || d.value > 366) {
+    if (prev && prev.diff) await kvPut("meetup-auto", { ...prev, diff: null });
+    return null;
+  }
+  const target = addDays(d.date, d.value),
+    cap = c && Number.isInteger(c.value) && c.value > 0 && c.value < 10000 ? String(c.value) : null,
+    u = S.meetup;
+  const wasAuto = prev && u.date === prev.date;
+  if (!u.date || u.date < today() || wasAuto) {
+    const isNew = !!u.date && u.date < today();
+    const goalAuto = !!cap && (isNew || u.goal === "" || (prev && u.goal === prev.goal));
+    if (u.date === target && (!goalAuto || u.goal === cap)) {
+      await kvPut("meetup-auto", { date: target, goal: goalAuto ? cap : prev && prev.goal, diff: null });
+      return null;
+    }
+    // Vorbei → neues Meetup: bisherige Angaben (Ort, Notiz) werden archiviert, nicht weitergetragen
+    if (isNew) {
+      const h = (await kvGet("meetup-history")) || [];
+      h.push({ ...clone(u), archivedAt: Date.now() });
+      await kvPut("meetup-history", h.slice(-30));
+    }
+    S.meetup = { ...u, date: target, goal: goalAuto ? cap : isNew ? "" : u.goal, ...(isNew ? { place: "", note: "" } : {}) };
+    touch(S.meetup);
+    await kvPut("meetup-auto", { date: target, goal: goalAuto ? cap : prev && prev.goal, diff: null });
+    logAction("meetup.auto", "auto", true, "Nächstes Meetup aus der Verwaltung: " + target + (goalAuto ? ", Ziel " + cap : ""));
+    return "Meetup-Datum aus der Verwaltung übernommen";
+  }
+  if (u.date !== target) {
+    await kvPut("meetup-auto", { ...(prev || {}), diff: { own: u.date, verwaltung: target } });
+    return "Meetup-Datum weicht von der Verwaltung ab";
+  }
+  if (prev && prev.diff) await kvPut("meetup-auto", { ...prev, diff: null });
+  return null;
 }
 
 /* Im Zyklus: höchstens alle 6 Stunden abrufen (Stufe 0, nur lesend). Nach Fehlern wachsende Pause
@@ -118,6 +169,11 @@ async function kpiAuto() {
   if (cfg.lastError && Date.now() - cfg.lastError.at < Math.min(8 * 3600e3, 30 * 60e3 * 2 ** Math.max(0, (cfg.fails || 1) - 1))) return null;
   const r = await kpiSync();
   return r.ok ? r.total + " Kennzahlen aus der Verwaltung (" + r.n + " neu oder geändert)" : "Verwaltung: " + r.error;
+}
+/* Hinweis, wenn das selbst eingetragene Meetup-Datum vom Datum in der Verwaltung abweicht */
+function kpiMeetupFinding() {
+  const d = KPI_MEETUP_DIFF;
+  return d && S.meetup.date === d.own ? { title: "Meetup-Datum weicht von der Verwaltung ab", detail: `In der App: ${fmt(d.own)}, in der Verwaltung: ${fmt(d.verwaltung)}. Bitte prüfen und in der Meetup-Karte korrigieren.` } : null;
 }
 /* Befund, wenn die Anbindung nicht mehr funktioniert (Grundlage für die automatische Auswertung fehlt) */
 function kpiFinding() {
